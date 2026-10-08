@@ -256,6 +256,14 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--bg)
 .tz-gz-n{display:block;font-family:'Inter',sans-serif;font-weight:700;font-size:22px;line-height:1.1}
 .tz-gz-l{display:block;font-size:12.5px;font-weight:600;color:var(--dark);margin-top:2px}
 .tz-gz-s{display:block;font-size:11px;color:var(--muted);margin-top:2px;min-height:13px}
+/* Wem die automatisch erledigten zugeordnet werden. Still gehalten: Es ist
+   eine Zuordnung über die Zuständigkeit, keine gemessene Leistung. */
+.tz-gperson{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px;
+  padding-top:12px;border-top:1px solid var(--hairline)}
+.tz-gp-ttl{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.tz-gp{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)}
+.tz-gp b{color:var(--dark);font-weight:650}
+.tz-gp-ohne{color:var(--faint);font-style:italic}
 .tz-bar{height:8px;background:var(--hairline);border-radius:100px;overflow:hidden}
 .tz-fill{height:8px;border-radius:100px;transition:width .4s}
 .tz-lead{font-size:13.5px;color:var(--muted);margin-top:2px;line-height:1.6;max-width:860px}
@@ -5430,6 +5438,24 @@ function kennDatei(monat){return KENN_DIR+'kennzahlen-'+monat+'.json';}
 // für den Tag des Exports. Zwei Implementierungen derselben Zahl liefen sonst
 // auseinander, und danach traut man keiner.
 let aufPensum={},aufPensumTag='';
+// Sind die Quellen des Tages überhaupt vollständig geladen?
+//
+// „Erledigt durch die Ursache" wird durch VERGLEICH erkannt: Was im Pensum
+// steht und jetzt fehlt, gilt als getan. Fehlt dagegen eine Quelle, fehlen auf
+// einen Schlag alle Aufgaben, die aus ihr kommen — und das sähe aus wie ein
+// perfekter Tag. Eine nicht geladene Verordnungsübersicht hätte am 08.10.2026
+// allein 197 Abrechnungen als erledigt gemeldet.
+//
+// Geprüft werden beide Quellen, aus denen Aufgaben entstehen: der Terminplan
+// je Standort und die Verordnungsübersicht. Fehlt eine, wird gar nichts
+// gezählt — zu wenig Erfolg zu zeigen ist der harmlosere Fehler.
+function aufQuellenDa(){
+  return LOCS.every(l=>{
+    const dd=DATA[l.suf];
+    if(!(dd&&dd.heute&&Array.isArray(dd.heute.tp)&&dd.heute.tp.length))return false;
+    return!!(VOD[l.id]&&VOD[l.id].vo);
+  });
+}
 // Was aus dem Pensum heute weggefallen ist — gefiltert wie die Ansicht selbst,
 // sonst nennt der Kopf eine Zahl, die in der Liste darunter nicht vorkommt.
 // `drin` sind die Kurzschlüssel, die JETZT noch dastehen.
@@ -5439,7 +5465,7 @@ function aufEntfallen(drin,area,locId){
   // „Alle" zeigte 28, Physio 2 und Ergo 0 — und niemand könnte sehen, warum.
   // Benannt wird sie an beiden Stellen, und sie verschwindet von selbst, sobald
   // die Einträge von heute früh aus dem Pensum gelaufen sind.
-  const out={n:0,jeKat:{},ohneLoc:0};
+  const out={n:0,jeKat:{},jePerson:{},ohneBer:0,ohneLoc:0};
   Object.keys(aufPensum).forEach(k=>{
     if(drin.has(k))return;
     const[kat,ber,loc]=String(aufPensum[k]).split('|');
@@ -5452,6 +5478,15 @@ function aufEntfallen(drin,area,locId){
     }else if(locId&&locId!==TZ_ALLE&&loc!==locId)return;
     if(!loc&&(!locId||locId===TZ_ALLE))out.ohneLoc++;
     out.n++;out.jeKat[kat||'?']=(out.jeKat[kat||'?']||0)+1;
+    // Wer war dafür zuständig? Die Aufgabe ist weg, ihre Zuweisung damit auch
+    // — was bleibt, ist der BEREICH im Pensum und die stehende Besetzung
+    // dieses Bereichs. Das ist eine Zuordnung über die Zuständigkeit, keine
+    // Beobachtung: Es sagt, wer dafür eingeteilt war, nicht wer es getan hat.
+    // Steht niemand im Bereich oder trägt die Aufgabe gar keinen, wird nichts
+    // erfunden — sie zählt unter „ohne Bereich".
+    const wer=(ber&&ber!=='ohne')?getAreaAssign(ber):[];
+    if(!wer.length){out.ohneBer++;return;}
+    wer.forEach(o=>{out.jePerson[o]=(out.jePerson[o]||0)+1;});
   });
   return out;
 }
@@ -5651,10 +5686,7 @@ function kennAufgaben(alt,tag){
   // sähe aus wie erledigt. Ein einziger fehlgeschlagener Export würde so
   // hunderte Erfolge erfinden. Das Pensum läuft dann zwar weiter, aber es wird
   // NICHTS als entfallen gewertet.
-  const vollstaendig=LOCS.every(l=>{
-    const dd=DATA[l.suf];
-    return!!(dd&&dd.heute&&Array.isArray(dd.heute.tp)&&dd.heute.tp.length);
-  });
+  const vollstaendig=aufQuellenDa();
   const dauerVor=zeigeDauer,hbVor=zeigeHb;
   let alle=[];
   try{
@@ -7465,7 +7497,7 @@ function renderAufgaben(){
   //
   // Nur am Tag des Exports: Für gestern liegt kein Pensum vor, und für morgen
   // gibt es keins. Dort bleibt die Zahl, was sie war.
-  const istPensumTag=!!(tag&&aufPensumTag&&tag.ds===aufPensumTag);
+  const istPensumTag=!!(tag&&aufPensumTag&&tag.ds===aufPensumTag)&&aufQuellenDa();
   // Verglichen wird gegen die VOLLSTÄNDIGE Liste, nicht gegen die gefilterte.
   //
   // Das Pensum entsteht in kennAufgaben mit beiden Schaltern an — es soll ja
@@ -7591,6 +7623,18 @@ function tzGeschafft(erledigt,ent,istPensumTag){
       +(e?e+' durch Erledigen der Ursache':'')+'</span></div>';
   });
   h+='</div>';
+  // Wer die automatisch erledigten bekommt. Zugeordnet wird über die stehende
+  // Besetzung des Bereichs, dem die Aufgabe gehörte — der Bereich ist das
+  // Einzige, was von einer verschwundenen Aufgabe übrig bleibt.
+  const pers=Object.keys(ent.jePerson||{}).sort((a,b)=>ent.jePerson[b]-ent.jePerson[a]);
+  if(pers.length||ent.ohneBer){
+    h+='<div class="tz-gperson"><span class="tz-gp-ttl">zugeordnet über die stehende Besetzung</span>';
+    pers.forEach(o=>{h+='<span class="tz-gp">'
+      +asgChip(o,'',personName(o)+' — war für diesen Bereich eingeteilt')
+      +'<b>'+ent.jePerson[o]+'</b> '+esc(personName(o))+'</span>';});
+    if(ent.ohneBer)h+='<span class="tz-gp tz-gp-ohne"><b>'+ent.ohneBer+'</b> ohne Bereich</span>';
+    h+='</div>';
+  }
   // Der Standort-Hinweis. Solange Einträge ohne Standortangabe im Pensum
   // stehen, addieren sich die Reiter nicht — das muss dastehen, sonst hält man
   // die Zahlen für kaputt.

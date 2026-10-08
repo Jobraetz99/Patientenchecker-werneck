@@ -5884,6 +5884,14 @@ async function kennSchreiben(){
 async function kennStart(){
   try{await kennPensumLaden();}catch(e){}
   try{await kennSchreiben();}catch(e){console.warn('Kennzahlen:',e);}
+  // Die vergangenen Tage des laufenden und des Vormonats mitladen: Ohne sie
+  // bliebe die Rückblick-Auswahl leer, und niemand käme auf die Idee, dass es
+  // sie gibt.
+  try{
+    const j=new Date();
+    await trEntfLaden([aufMonatVon(new Date(j.getFullYear(),j.getMonth()-1,1).getTime()),
+                       aufMonatVon(Date.now())]);
+  }catch(e){}
   try{rerenderTasks();}catch(e){}
 }
 
@@ -7442,7 +7450,16 @@ function toggleSec(key){lsSet('kimojo_secopen_'+key,!secOpen(key));renderAufgabe
 
 // Datumsnavigator im Kopf des Reiters: gilt für Aufgabenliste UND Tagesplan,
 // weil beide Ansichten denselben Tagesbestand zeigen.
-function tzSetDay(i){const tage=tzTage(tzLoc);tzDay=Math.max(0,Math.min(Math.max(0,tage.length-1),parseInt(i,10)||0));renderAufgaben();}
+// Die Auswahl führt entweder auf einen Terminplantag (Index) oder in den
+// Rückblick („r:2026-10-07"). Zwei Ziele in einem Menü, weil es für den Empfang
+// ein Gedanke ist: „welcher Tag?"
+function tzSetDay(i){
+  const v=String(i||'');
+  if(v.slice(0,2)==='r:')return tzSetRueck(v.slice(2));
+  const tage=tzTage(tzLoc);
+  tzDay=Math.max(0,Math.min(Math.max(0,tage.length-1),parseInt(v,10)||0));
+  renderAufgaben();
+}
 // Freie Minuten und Luecken je Tag. Dieselbe Rechnung wie im Luecken-Reiter
 // (analyzeDay), nur zusammengefasst — damit das Tagesziel dieselben Zahlen
 // nennt und nicht eine zweite Wahrheit aufmacht. Gerechnet wird nur fuer die
@@ -7484,16 +7501,154 @@ function tzDateNav(tage,idx){
     const min=info.reduce((s,I)=>s+I.min,0);
     return min>0?' · '+min+' min frei':' · voll';
   };
-  let opts='';tage.forEach((t,i)=>{opts+='<option value="'+i+'"'+(i===idx?' selected':'')+'>'+esc(tzLabel(t.ds)+mm(t))+'</option>';});
+  // Vergangene Tage stehen mit in der Auswahl, als eigene Gruppe. Sie führen
+  // in den Rückblick: Eine Aufgabenliste gibt es dort nicht mehr, die Zahlen
+  // des Tages schon.
+  const frueher=kennTageMitAufgaben().filter(d=>d<tage[0].ds);
+  let opts='';
+  if(frueher.length){
+    opts+='<optgroup label="Rückblick">';
+    frueher.forEach(d=>{opts+='<option value="r:'+esc(d)+'">'+esc(tzLabel(d))+'</option>';});
+    opts+='</optgroup><optgroup label="Terminplan">';
+  }
+  tage.forEach((t,i)=>{opts+='<option value="'+i+'"'+(i===idx?' selected':'')+'>'+esc(tzLabel(t.ds)+mm(t))+'</option>';});
+  if(frueher.length)opts+='</optgroup>';
+  // Am ersten Tag führt „‹" nicht ins Leere, sondern in den Rückblick.
+  const zurueck=idx<=0&&frueher.length?'tzSetRueck(\''+jsq(frueher[0])+'\')':'tzNav(-1)';
   return'<div class="datenav">'
-    +'<button class="dn-btn" onclick="tzNav(-1)"'+(idx<=0?' disabled':'')+'>‹</button>'
+    +'<button class="dn-btn" onclick="'+zurueck+'"'+(idx<=0&&!frueher.length?' disabled':'')
+    +' title="'+escA(idx<=0&&frueher.length?'Zurück zu '+tzLabel(frueher[0]):'Ein Tag zurück')+'">‹</button>'
     +'<div class="dn-center"><div class="dn-lbl">'+esc(tzLabel(tage[idx].ds)+mm(tage[idx]))+'</div>'
     +'<select class="dn-sel" onchange="tzSetDay(this.value)">'+opts+'</select></div>'
     +'<button class="dn-btn" onclick="tzNav(1)"'+(idx>=tage.length-1?' disabled':'')+'>›</button>'
     +'<div class="dn-count">Tag '+(idx+1)+' / '+tage.length+'</div></div>';
 }
 
+// ── Rückblick auf einen vergangenen Tag ────────────────────────────────────
+// Der Terminplan schaut nur nach vorn, eine Aufgabenliste von gestern gibt es
+// deshalb nicht mehr. Die ZAHLEN des Tages liegen aber in der Kennzahlendatei,
+// und zwar vollständig: Pensum, Abgehaktes, Entfallenes je Kategorie und je
+// Person. Das ist der Rückblick — keine Liste, sondern was an dem Tag war.
+//
+// Einzelne Patientennamen stehen nicht darin. Die Schlüsselliste des Pensums
+// wird für vergangene Tage bewusst gelöscht; sie allein ist zwanzig Kilobyte
+// am Tag, der Rest zusammen acht.
+let tzRueck=null;
+function tzSetRueck(ds){tzRueck=ds||null;renderAufgaben();}
+function renderRueckblick(ds){
+  const t=kennTagAus(ds),a=(t&&t.auf)||null,st=(a&&a.stand)||null;
+  let h='<div class="summary"><h2>🗓️ Rückblick · '+esc(tzLabel(ds))+'</h2>'
+    +'<div class="tz-lead">Was an diesem Tag anlag und was davon wegging. '
+    +'Aus der Kennzahlendatei — der Terminplan von damals liegt nicht mehr vor, '
+    +'einzelne Namen stehen deshalb nicht dabei.</div></div>';
+  h+=tzRueckNav(ds);
+  if(!t){
+    h+='<div class="empty" style="line-height:1.7">Für diesen Tag liegen keine Zahlen vor.<br>'
+      +'<span style="font-size:12px">Die Reihe beginnt an dem Tag, an dem das Tagespensum in '
+      +'Betrieb ging. Sie wächst nur vorwärts — rückwirkend lässt sie sich nicht füllen.</span></div>';
+    h+='<div class="ft">KIMOJO · <b>Rückblick</b> Werneck</div>';
+    document.getElementById('mc').innerHTML=h;return;
+  }
+  if(!st){
+    h+='<div class="empty" style="line-height:1.7">An diesem Tag wurden nur Telefoniezahlen erfasst.<br>'
+      +'<span style="font-size:12px">Aufgabenzahlen entstehen nur, während der Patientenchecker offen ist.</span></div>';
+  }else{
+    const abg=(st.fertig||0)+(st.abgelehnt||0),ent=st.entfallen||0;
+    h+='<div class="sg" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">'
+      +'<div class="si"><div class="si-l">📋 Tagespensum</div><div class="si-v">'+(st.pensum||0)+'</div>'
+        +'<div class="si-s">lag an diesem Tag an</div></div>'
+      +'<div class="si"><div class="si-l">✅ Abgehakt</div><div class="si-v">'+abg+'</div>'
+        +'<div class="si-s">jemand hat entschieden</div></div>'
+      +'<div class="si"><div class="si-l">🏁 Ohne Haken</div><div class="si-v">'+ent+'</div>'
+        +'<div class="si-s">durch Erledigen der Ursache</div></div>'
+      +'<div class="si"><div class="si-l">📭 Blieb liegen</div><div class="si-v">'+(st.rest||0)+'</div>'
+        +'<div class="si-s">am Abend noch offen</div></div>'
+      +'</div>';
+    if(st.unsicher)h+='<div class="auf-zustand auf-zustand-fehler" style="margin-bottom:14px">'
+      +'An diesem Tag fehlten Standortdaten. „Ohne Haken" steht deshalb zu niedrig, nicht zu hoch.</div>';
+    // Je Kategorie: was anlag und was davon wegging.
+    const jk=a.jeKat||{};
+    const kats=TZ_REIHE.filter(k=>jk[k]).concat(jk.sonst?['sonst']:[]);
+    if(kats.length){
+      h+='<div class="st" style="cursor:default">🏁 Was an diesem Tag wegging</div>';
+      h+='<div class="vl-card"><table class="data-t"><thead><tr><th>Kategorie</th>'
+        +'<th class="r">lag an</th><th class="r">erledigt</th><th class="r">blieb offen</th></tr></thead><tbody>';
+      kats.forEach(k=>{const v=jk[k]||{},o=v.offen||0,e=v.erledigt||0;
+        const K=TZ_KAT[k]||{l:k==='sonst'?'Sonstige':k,ico:'•'};
+        h+='<tr><td>'+esc((K.ico||'')+' '+K.l)+'</td>'
+          +'<td class="r">'+(o+e)+'</td>'
+          +'<td class="r"><b>'+e+'</b></td>'
+          +'<td class="r"'+(o?'':' style="color:var(--faint)"')+'>'+(o||'–')+'</td></tr>';});
+      h+='</tbody></table></div>';
+    }
+    // Je Person — nur wenn der Tag sie mitgeschrieben hat.
+    const ep=a.entfPerson||null;
+    if(ep&&Object.keys(ep).length){
+      h+='<div class="st" style="cursor:default">👤 Zugeordnet über die Besetzung</div>';
+      h+='<div class="vl-card"><table class="data-t"><thead><tr><th>Person</th>'
+        +'<th class="r">ohne Haken</th></tr></thead><tbody>';
+      Object.keys(ep).sort((x,y)=>ep[y]-ep[x]).forEach(o=>{
+        h+='<tr><td><span class="asg-chip" style="background:'+teamColor(o)+';margin-right:7px">'
+          +esc(teamInitials(o))+'</span>'+esc(personName(o))+'</td>'
+          +'<td class="r"><b>'+ep[o]+'</b></td></tr>';});
+      h+='</tbody></table></div>';
+    }else if(ent){
+      h+='<div class="auf-zustand" style="margin-bottom:14px">An diesem Tag wurde noch nicht '
+        +'mitgeschrieben, wer den jeweiligen Bereich besetzt hatte.</div>';
+    }
+  }
+  // Auslastung und Telefonie des Tages stehen ohnehin in der Datei.
+  const locs=t.loc||{};
+  const lk=Object.keys(locs);
+  if(lk.length){
+    h+='<div class="st" style="cursor:default">🏥 Standorte an diesem Tag</div>';
+    h+='<div class="vl-card"><table class="data-t"><thead><tr><th>Standort</th>'
+      +'<th class="r">Auslastung</th><th class="r">bereinigt</th><th class="r">Lücken</th>'
+      +'<th class="r">freie Zeit</th></tr></thead><tbody>';
+    lk.forEach(k=>{const L=locs[k],d=(L&&L.heute)||{};
+      h+='<tr><td>'+esc((L&&L.label)||k)+'</td>'
+        +'<td class="r">'+(d.ausl!=null?d.ausl+' %':'–')+'</td>'
+        +'<td class="r">'+(d.auslB!=null?d.auslB+' %':'–')+'</td>'
+        +'<td class="r">'+(d.luecken!=null?d.luecken:'–')+'</td>'
+        +'<td class="r">'+(d.freiMin!=null?Math.round(d.freiMin/6)/10+' h':'–')+'</td></tr>';});
+    h+='</tbody></table></div>';
+  }
+  if(t.tel&&t.tel.anrufe){
+    h+='<div class="st" style="cursor:default">📞 Telefonie an diesem Tag</div>';
+    h+='<div class="sg" style="grid-template-columns:repeat(3,1fr)">'
+      +'<div class="si"><div class="si-l">Anrufe</div><div class="si-v">'+t.tel.anrufe+'</div></div>'
+      +'<div class="si"><div class="si-l">Annahmequote</div><div class="si-v">'
+        +(t.tel.quote!=null?t.tel.quote+' %':'–')+'</div></div>'
+      +'<div class="si"><div class="si-l">Verloren</div><div class="si-v">'+(t.tel.verloren||0)+'</div></div>'
+      +'</div>';
+  }
+  h+='<div class="ft">KIMOJO · <b>Rückblick</b> Werneck</div>';
+  document.getElementById('mc').innerHTML=h;
+}
+// Der Navigator des Rückblicks: zurück in die Vergangenheit, vorwärts bis
+// wieder „heute" erreicht ist.
+function tzRueckNav(ds){
+  const tage=kennTageMitAufgaben();           // jüngster zuerst
+  const i=tage.indexOf(ds);
+  const aelter=i>=0&&i+1<tage.length?tage[i+1]:null;
+  const juenger=i>0?tage[i-1]:null;
+  let opts='';tage.forEach(d=>{opts+='<option value="'+esc(d)+'"'+(d===ds?' selected':'')+'>'
+    +esc(tzLabel(d))+'</option>';});
+  return'<div class="datenav">'
+    +'<button class="dn-btn" onclick="tzSetRueck(\''+jsq(aelter||'')+'\')"'+(aelter?'':' disabled')+'>‹</button>'
+    +'<div class="dn-center"><div class="dn-lbl">'+esc(tzLabel(ds))+'</div>'
+    +'<select class="dn-sel" onchange="tzSetRueck(this.value)">'+opts+'</select></div>'
+    +'<button class="dn-btn" onclick="tzSetRueck(\''+jsq(juenger||'')+'\')">›</button>'
+    +'<div class="dn-count"><button class="fsw" onclick="tzSetRueck(\'\')">→ zurück zu heute</button></div></div>';
+}
+
 function renderAufgaben(){
+  // Vergangenheit: eigene Ansicht, eigene Quelle.
+  if(tzRueck){
+    trEntfLaden(trMonate(new Date(tzRueck).getTime(),Date.now()))
+      .then(neu=>{if(neu&&curView==='tagesziel'&&tzRueck)renderAufgaben();});
+    return renderRueckblick(tzRueck);
+  }
   const tage=tzTage(tzLoc);
   // Startwert: der heutige Tag, sonst der naechste kuenftige. Die Terminplan-
   // Dateien koennen einen Tag alt sein — dann faengt die Liste sonst gestern an.
@@ -10817,13 +10972,15 @@ function trZaehlen(von,bis){
   return{proPerson,proKat,ges,abg};
 }
 
-// ── Die automatisch Erledigten im Team-Report ──────────────────────────────
-// Sie stehen in KEINEM Protokoll: Niemand hat geklickt, die Aufgabe war
-// irgendwann einfach weg. Festgehalten wird das nur in der Kennzahlendatei, je
-// Tag und je Konto — deshalb liest der Report hier eine zweite Quelle.
+// ── Vergangene Tage aus der Kennzahlendatei ────────────────────────────────
+// Was gestern los war, steht nicht mehr im Terminplan — der schaut nur nach
+// vorn. Es steht in der Kennzahlendatei, die bei jedem Lauf fortgeschrieben
+// wird: Pensum, Abgehaktes, Entfallenes je Kategorie und je Person, dazu
+// Auslastung, Lücken und Telefonie. Rund acht Kilobyte je Tag.
 //
-// Gemerkt wird je Monat, weil die Dateien monatsweise liegen und ein Wechsel
-// des Zeitraums sonst jedes Mal neu lädt.
+// Zwei Leser teilen sich diesen Cache: der Team-Report über Wochen und der
+// Tagesrückblick über einen einzelnen Tag. Gemerkt wird je MONAT, weil die
+// Dateien monatsweise liegen.
 const trEntfCache={};let trEntfLaedt=false;
 async function trEntfLaden(monate){
   const offen=monate.filter(m=>!(m in trEntfCache));
@@ -10837,6 +10994,22 @@ async function trEntfLaden(monate){
     }));
   }finally{trEntfLaedt=false;}
   return true;
+}
+// Ein einzelner Tag aus dem Cache. null heißt „nicht geladen oder nicht da" —
+// beides darf nicht als „nichts passiert" durchgehen.
+function kennTagAus(ds){
+  if(!ds)return null;
+  const m=String(ds).slice(0,7);
+  const liste=trEntfCache[m];
+  if(!liste)return null;
+  return liste.filter(t=>t&&t.ds===ds)[0]||null;
+}
+// Alle Tage, für die überhaupt Aufgabenzahlen vorliegen, jüngster zuerst.
+function kennTageMitAufgaben(){
+  const aus=[];
+  Object.keys(trEntfCache).forEach(m=>(trEntfCache[m]||[]).forEach(t=>{
+    if(t&&t.ds&&t.auf&&t.auf.stand)aus.push(t.ds);}));
+  return [...new Set(aus)].sort().reverse();
 }
 // Summiert die entfallenen Aufgaben je Person über den Zeitraum. Gezählt wird
 // je TAG, nicht je Lauf: In der Datei steht ein Eintrag pro Tag, und der trägt

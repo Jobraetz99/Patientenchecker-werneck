@@ -5434,15 +5434,23 @@ let aufPensum={},aufPensumTag='';
 // sonst nennt der Kopf eine Zahl, die in der Liste darunter nicht vorkommt.
 // `drin` sind die Kurzschlüssel, die JETZT noch dastehen.
 function aufEntfallen(drin,area,locId){
-  const out={n:0,jeKat:{}};
+  // `ohneLoc` zählt die Einträge, die mangels Standortangabe in dieser Ansicht
+  // fehlen. Ohne diese Zahl widersprächen sich die Reiter stillschweigend:
+  // „Alle" zeigte 28, Physio 2 und Ergo 0 — und niemand könnte sehen, warum.
+  // Benannt wird sie an beiden Stellen, und sie verschwindet von selbst, sobald
+  // die Einträge von heute früh aus dem Pensum gelaufen sind.
+  const out={n:0,jeKat:{},ohneLoc:0};
   Object.keys(aufPensum).forEach(k=>{
     if(drin.has(k))return;
     const[kat,ber,loc]=String(aufPensum[k]).split('|');
     if(area&&area!=='alle'&&ber!==area)return;
-    // Ältere Pensumeinträge führen keinen Standort. Sie bei der Standortwahl
-    // wegzulassen wäre falsch — sie gehören zu einem der beiden, nur steht
-    // nicht welchem. Sie zählen deshalb in „Alle" und nirgends sonst.
-    if(locId&&locId!==TZ_ALLE&&loc!==locId)return;
+    if(!loc){
+      // Ältere Pensumeinträge führen keinen Standort. Sie gehören zu einem der
+      // beiden, nur steht nicht welchem — geraten wird nicht. Unter „Alle"
+      // zählen sie mit, bei einer Standortwahl werden sie ausgewiesen.
+      if(locId&&locId!==TZ_ALLE){out.ohneLoc++;return;}
+    }else if(locId&&locId!==TZ_ALLE&&loc!==locId)return;
+    if(!loc&&(!locId||locId===TZ_ALLE))out.ohneLoc++;
     out.n++;out.jeKat[kat||'?']=(out.jeKat[kat||'?']||0)+1;
   });
   return out;
@@ -7583,6 +7591,17 @@ function tzGeschafft(erledigt,ent,istPensumTag){
       +(e?e+' durch Erledigen der Ursache':'')+'</span></div>';
   });
   h+='</div>';
+  // Der Standort-Hinweis. Solange Einträge ohne Standortangabe im Pensum
+  // stehen, addieren sich die Reiter nicht — das muss dastehen, sonst hält man
+  // die Zahlen für kaputt.
+  if(ent.ohneLoc)h+='<div style="font-size:11.5px;color:var(--muted);line-height:1.6;margin-top:12px">'
+    +'<b style="color:var(--dark)">'+ent.ohneLoc+'</b> dieser Aufgaben '
+    +(tzLoc===TZ_ALLE
+      ? 'lassen sich noch keinem Standort zuordnen — unter „Werneck Physio" und '
+        +'„Werneck Ergo" fehlen sie deshalb. '
+      : 'stehen nur unter „Alle": Ihnen fehlt die Standortangabe. ')
+    +'Sie stammen aus Läufen von heute früh, bevor der Standort mitgeschrieben wurde; '
+    +'ab morgen trägt ihn jeder Eintrag.</div>';
   // Warum die beiden Wege getrennt stehen. Ohne diesen Satz liest sich die
   // größere Zahl als reine Leistung — meistens ist sie das auch, aber nicht
   // immer, und das muss dastehen.

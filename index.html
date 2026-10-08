@@ -906,7 +906,14 @@ if(window.opener&&window.opener!==window&&String(window.name||'').startsWith('ms
   throw new Error('msal-popup-guard');
 }
 // Popups landen auf blank.html -> App startet dort NICHT neu -> kein verschachtelter Popup-Aufruf
-const POPUP_REDIRECT=window.location.origin+window.location.pathname+'blank.html';
+//
+// Der Dateiname muss aus dem Pfad heraus, sonst entsteht Unsinn. Liegt die Seite
+// unter „/werneck.html", ergäbe ein blosses Anhängen „/werneck.htmlblank.html";
+// bisher fiel das nur nicht auf, weil die Seite unter einem Pfad mit Schrägstrich
+// am Ende lief. Beim Umzug auf einen anderen Host wäre die Anmeldung still
+// kaputtgegangen — der Popup-Redirect hätte ins Leere gezeigt.
+const APP_BASIS=window.location.origin+window.location.pathname.replace(/[^/]*$/,'');
+const POPUP_REDIRECT=APP_BASIS+'blank.html';
 
 const MC={auth:{clientId:"9fe9cda7-79c3-4d06-82dc-372715bb8086",authority:"https://login.microsoftonline.com/3e5c8d47-8ccc-42f6-877d-0d0e72972e39",redirectUri:window.location.origin+window.location.pathname,navigateToLoginRequestUrl:false},cache:{cacheLocation:"sessionStorage"}};
 // User.Read ist die Mindestberechtigung für /me/memberOf und braucht keine

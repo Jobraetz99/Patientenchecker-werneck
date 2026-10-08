@@ -256,6 +256,20 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--bg)
 .tz-gz-n{display:block;font-family:'Inter',sans-serif;font-weight:700;font-size:22px;line-height:1.1}
 .tz-gz-l{display:block;font-size:12.5px;font-weight:600;color:var(--dark);margin-top:2px}
 .tz-gz-s{display:block;font-size:11px;color:var(--muted);margin-top:2px;min-height:13px}
+/* „von 27" — der Nenner steht kleiner als die Zahl, die die Antwort ist. */
+.tz-gz-v{font-size:13px;font-weight:500;color:var(--muted)}
+/* Kopfzeile: Bereichsschalter links, Filter rechts. Bricht auf dem iPad am
+   Empfang in zwei Zeilen um, statt die Knöpfe zu quetschen. */
+.tz-kopfzeile{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.tz-kopfzeile>.tz-modebar{margin-bottom:0}
+.fsw-row{display:flex;gap:6px;flex-wrap:wrap}
+.fsw{border:1px solid var(--border);background:var(--card);color:var(--muted);border-radius:100px;
+  padding:6px 12px;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:550;cursor:pointer;
+  white-space:nowrap;transition:border-color .12s,color .12s}
+.fsw:hover{border-color:var(--primary);color:var(--primary)}
+.fsw b{font-weight:650;color:var(--faint);margin-left:2px}
+.fsw.a{border-color:var(--primary);color:var(--primary);background:var(--primary-bg)}
+.fsw.a b{color:var(--primary)}
 /* Wem die automatisch erledigten zugeordnet werden. Still gehalten: Es ist
    eine Zuordnung über die Zuständigkeit, keine gemessene Leistung. */
 .tz-gperson{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px;
@@ -516,12 +530,8 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--bg)
 /* Dauerpatienten-Schalter. Sitzt in einer .flt-Leiste und soll wie ein Filter
    aussehen, aber nicht wie einer der Grundfilter — deshalb lila statt neutral,
    und im eingeschalteten Zustand deutlich gefuellt. */
-.dau-sw{display:inline-flex;align-items:center;gap:7px;padding:5px 13px;border-radius:100px;
   border:1px solid var(--border);background:var(--card);color:var(--muted);
   font-family:'Inter',sans-serif;font-size:12.5px;font-weight:450;cursor:pointer;transition:all .13s}
-.dau-sw:hover{border-color:var(--purple);color:var(--dark)}
-.dau-sw:has(input:checked){border-color:var(--purple);background:var(--purple-bg,#F3F0F8);color:var(--purple);font-weight:600}
-.dau-sw input{cursor:pointer;accent-color:var(--purple);margin:0}
 /* Verplanung: je Verordnung eine Zeile mit den drei Zahlen, aus denen sich der
    Rest ergibt. Bewusst als eigene Zeile und nicht als Fliesstext — verordnet,
    erbracht und gebucht sollen untereinander stehend vergleichbar bleiben. */
@@ -534,7 +544,6 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--bg)
 .vp-hm{font-weight:600;color:var(--dark);min-width:120px}
 .vp-z b{color:var(--dark);font-weight:700;font-variant-numeric:tabular-nums}
 .vp-rest b{color:var(--primary)}
-.dau-sw b{font-weight:650}
 .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
 .sep{width:1px;height:20px;background:var(--border);margin:0 8px}
 .search{padding:6px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12.5px;font-family:'Inter',sans-serif;width:220px;background:var(--card);color:var(--dark)}
@@ -5465,18 +5474,28 @@ function aufEntfallen(drin,area,locId){
   // „Alle" zeigte 28, Physio 2 und Ergo 0 — und niemand könnte sehen, warum.
   // Benannt wird sie an beiden Stellen, und sie verschwindet von selbst, sobald
   // die Einträge von heute früh aus dem Pensum gelaufen sind.
-  const out={n:0,jeKat:{},jePerson:{},ohneBer:0,ohneLoc:0};
+  const out={n:0,jeKat:{},jeKatGes:{},jePerson:{},ohneBer:0,ohneLoc:0};
   Object.keys(aufPensum).forEach(k=>{
-    if(drin.has(k))return;
     const[kat,ber,loc]=String(aufPensum[k]).split('|');
     if(area&&area!=='alle'&&ber!==area)return;
-    if(!loc){
-      // Ältere Pensumeinträge führen keinen Standort. Sie gehören zu einem der
-      // beiden, nur steht nicht welchem — geraten wird nicht. Unter „Alle"
-      // zählen sie mit, bei einer Standortwahl werden sie ausgewiesen.
-      if(locId&&locId!==TZ_ALLE){out.ohneLoc++;return;}
-    }else if(locId&&locId!==TZ_ALLE&&loc!==locId)return;
-    if(!loc&&(!locId||locId===TZ_ALLE))out.ohneLoc++;
+    // Standortwahl: Alles, was nicht hierher gehört, fällt raus — auch die
+    // älteren Einträge ohne Standortangabe. Zähler und Nenner müssen dieselbe
+    // Menge meinen, sonst stünde „9 von 27" über zwei verschiedenen Mengen.
+    // Nur die weggefallenen davon werden als „ohne Standort" ausgewiesen; die
+    // noch offenen stehen ja in der Liste und brauchen keinen Hinweis.
+    if(locId&&locId!==TZ_ALLE&&loc!==locId){
+      if(!loc&&!drin.has(k))out.ohneLoc++;
+      return;
+    }
+    // Das Tagespensum je Kategorie — der Nenner für „9 von 27 Lücken". Gezählt
+    // wird hier ALLES, was heute anlag, auch was noch offen ist; erst danach
+    // kommt die Frage, was davon weg ist.
+    out.jeKatGes[kat||'?']=(out.jeKatGes[kat||'?']||0)+1;
+    if(drin.has(k))return;
+    // Unter „Alle" zählen die standortlosen mit — dort fehlt nichts. Die Zahl
+    // steht trotzdem dabei, weil sie erklärt, warum Physio und Ergo zusammen
+    // weniger ergeben.
+    if(!loc)out.ohneLoc++;
     out.n++;out.jeKat[kat||'?']=(out.jeKat[kat||'?']||0)+1;
     // Wer war dafür zuständig? Die Aufgabe ist weg, ihre Zuweisung damit auch
     // — was bleibt, ist der BEREICH im Pensum und die stehende Besetzung
@@ -6516,9 +6535,9 @@ const DAUER_QUELLE='Betrifft „Folge-VO anfordern" und „Dauerplan anbieten" �
   +'Abrechnung und Lücken bleiben. Erkannt am Namenszusatz DAU und am Bemerkungsfeld des Patienten.';
 function dauerSchalter(n){
   if(!n&&!zeigeDauer)return'';
-  return'<label class="dau-sw" title="'+escA(DAUER_QUELLE)+'"><input type="checkbox"'+(zeigeDauer?' checked':'')
-    +' onchange="setZeigeDauer(this.checked)"> 📌 Dauerpatienten anzeigen'
-    +(n?' <b>('+n+' ausgeblendet)</b>':'')+'</label>';
+  return'<button class="fsw'+(zeigeDauer?' a':'')+'" onclick="setZeigeDauer('+(zeigeDauer?'false':'true')+')"'
+    +' title="'+escA((zeigeDauer?'Dauerpatienten ausblenden. ':'Dauerpatienten einblenden. ')+DAUER_QUELLE)+'">'
+    +'📌 Dauerpatienten'+(n?' <b>'+n+'</b>':'')+'</button>';
 }
 
 // Hausbesuche. Eigener Schalter, nicht an den Dauerpatienten angehaengt: das ist
@@ -6533,9 +6552,9 @@ const HB_TITEL='Betrifft „Rezept fertig verplanen" und die Nachrücker. '
   +'(Privatformulare haben kein Häkchen) und am Termin.';
 function hbSchalter(n){
   if(!n&&!zeigeHb)return'';
-  return'<label class="dau-sw" title="'+escA(HB_TITEL)+'"><input type="checkbox"'+(zeigeHb?' checked':'')
-    +' onchange="setZeigeHb(this.checked)"> 🚗 Hausbesuche anzeigen'
-    +(n?' <b>('+n+' ausgeblendet)</b>':'')+'</label>';
+  return'<button class="fsw'+(zeigeHb?' a':'')+'" onclick="setZeigeHb('+(zeigeHb?'false':'true')+')"'
+    +' title="'+escA((zeigeHb?'Hausbesuche ausblenden. ':'Hausbesuche einblenden. ')+HB_TITEL)+'">'
+    +'🚗 Hausbesuche'+(n?' <b>'+n+'</b>':'')+'</button>';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -7544,18 +7563,19 @@ function renderAufgaben(){
     +'</div><div class="tz-kpi-l">'+esc(k.l)+'</div><div class="tz-kpi-s">'+esc(k.s)+'</div></div>';});
   h+='</div>';
 
-  h+=tzAreaBar();
+  // Bereichsschalter links, die beiden Filter rechts daneben in derselben
+  // Zeile. Sie gehören zur Ansicht, nicht zur Liste — und nehmen so keine
+  // eigene Zeile mehr weg.
+  const filter=(T.dauerAus||zeigeDauer?dauerSchalter(T.dauerAus):'')
+              +(T.hbAus||zeigeHb?hbSchalter(T.hbAus):'');
+  h+='<div class="tz-kopfzeile">'+tzAreaBar()
+    +(filter?'<div class="fsw-row">'+filter+'</div>':'')+'</div>';
   // Die Besetzung steht direkt unter dem Bereichsschalter: Sie gehört zur
   // Bereichswahl, nicht zur Liste darunter.
   h+=tzAreaCrew();
   // Der Tagesplan hängt am Empfangstag, deshalb steht der Umschalter nur im
   // Tagesgeschäft. Allgemein und Backoffice sind reine Listen.
   if(tzArea==='tg')h+=tzModeToggle();
-  // Beide Schalter in eine Zeile, ohne Begleittext. Im Tagesziel zaehlt die
-  // Liste darunter; was die Schalter tun, steht in ihrem Tooltip.
-  const filter=(T.dauerAus||zeigeDauer?dauerSchalter(T.dauerAus):'')
-              +(T.hbAus||zeigeHb?hbSchalter(T.hbAus):'');
-  if(filter)h+='<div class="flt">'+filter+'</div>';
   if(tzZeigeTeamBar())h+=renderTeamBar();
   h+='<div id="tzBody"></div>';
   h+='<div class="ft">KIMOJO · <b>Tagesziel</b> Werneck</div>';
@@ -7574,15 +7594,7 @@ function renderAufgaben(){
         +(ent.n?' (davon <b>'+ent.n+'</b> durch Erledigen der Ursache)':'')
         +(gesamt-fertig>0?' · <b>'+(gesamt-fertig)+'</b> bleibt für morgen liegen':' · <b>alles geschafft ✓</b>')+'.</div></div>';
     }
-    // Fortschrittsbalken
-    body+='<div class="tz-wrap">'
-      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">'
-      +'<div style="font-family:Inter,sans-serif;font-weight:600;font-size:15px;color:var(--dark)">✅ Tagesziel-Fortschritt'
-      +(ent.n?'<span style="font-weight:400;color:var(--muted);font-size:12.5px"> · gemessen am Tagespensum</span>':'')+'</div>'
-      +'<div style="font-family:Inter,sans-serif;font-weight:650;font-size:16px;color:'+barFarbe+'">'+fertig+' von '+gesamt+' erledigt</div></div>'
-      +'<div class="tz-bar"><div class="tz-fill" style="width:'+Math.max(pct,4)+'%;background:'+barFarbe+'"></div></div></div>';
     body+=tzGeschafft(erledigt,ent,istPensumTag);
-    body+=tzPersonen(liste);
     body+=tzListe(liste,tag?tag.ds:null);
   }
   document.getElementById('tzBody').innerHTML=body;
@@ -7616,25 +7628,16 @@ function tzGeschafft(erledigt,ent,istPensumTag){
     +'</div></div><div class="tz-geschafft">';
   kats.forEach(k=>{
     const K=TZ_KAT[k]||{l:k,ico:'•',farbe:'var(--muted)'};
-    const a=ab[k]||0,e=(ent.jeKat||{})[k]||0;
-    h+='<div class="tz-gz"><span class="tz-gz-n" style="color:'+K.farbe+'">'+(a+e)+'</span>'
+    const a=ab[k]||0,e=(ent.jeKat||{})[k]||0,ges=(ent.jeKatGes||{})[k]||0;
+    h+='<div class="tz-gz"><span class="tz-gz-n" style="color:'+K.farbe+'">'+(a+e)
+      +(ges?'<span class="tz-gz-v"> von '+ges+'</span>':'')+'</span>'
       +'<span class="tz-gz-l">'+K.ico+' '+esc(K.l)+'</span>'
       +'<span class="tz-gz-s">'+(a?a+' abgehakt':'')+(a&&e?' · ':'')
       +(e?e+' durch Erledigen der Ursache':'')+'</span></div>';
   });
   h+='</div>';
-  // Wer die automatisch erledigten bekommt. Zugeordnet wird über die stehende
-  // Besetzung des Bereichs, dem die Aufgabe gehörte — der Bereich ist das
-  // Einzige, was von einer verschwundenen Aufgabe übrig bleibt.
-  const pers=Object.keys(ent.jePerson||{}).sort((a,b)=>ent.jePerson[b]-ent.jePerson[a]);
-  if(pers.length||ent.ohneBer){
-    h+='<div class="tz-gperson"><span class="tz-gp-ttl">zugeordnet über die stehende Besetzung</span>';
-    pers.forEach(o=>{h+='<span class="tz-gp">'
-      +asgChip(o,'',personName(o)+' — war für diesen Bereich eingeteilt')
-      +'<b>'+ent.jePerson[o]+'</b> '+esc(personName(o))+'</span>';});
-    if(ent.ohneBer)h+='<span class="tz-gp tz-gp-ohne"><b>'+ent.ohneBer+'</b> ohne Bereich</span>';
-    h+='</div>';
-  }
+  // Die Zuordnung je Person (ent.jePerson) wird weiter gerechnet und ist
+  // getestet, aber derzeit NICHT angezeigt — auf Wunsch erst einmal raus.
   // Der Standort-Hinweis. Solange Einträge ohne Standortangabe im Pensum
   // stehen, addieren sich die Reiter nicht — das muss dastehen, sonst hält man
   // die Zahlen für kaputt.
@@ -7682,28 +7685,6 @@ function tzPatientenAmTag(tag){
   return Object.values(patAppt).sort((x,y)=>(x.start-y.start)||x.name.localeCompare(y.name));
 }
 
-// Seit eine Aufgabe mehreren Leuten gehören kann, ist die Summe dieser Zahlen
-// GRÖSSER als die Zahl der Aufgaben — eine Aufgabe für zwei zählt bei beiden.
-// Das muss dastehen, sonst addiert man die Chips und wundert sich.
-function tzPersonen(liste){
-  const team=getTeam();if(!team.length)return'';
-  const stats={};team.forEach(m=>stats[m.oid]={open:0,done:0});
-  let ohne=0,mehrfach=0;
-  liste.forEach(t=>{
-    const who=effectiveAssignee(t.id,t.cat),d=taskDone(t.id);
-    if(!who.length){if(!d)ohne++;return;}
-    if(who.length>1&&!d)mehrfach++;
-    who.forEach(o=>{if(stats[o]){if(d)stats[o].done++;else stats[o].open++;}});
-  });
-  let h='<div class="tz-persons">';
-  team.forEach(m=>{const s=stats[m.oid];
-    h+='<div class="tz-person"><span class="asg-chip" style="background:'+teamColor(m.oid)+'">'+esc(teamInitials(m.oid))+'</span>'
-      +esc(m.n)+' <span class="tz-person-n">'+s.open+' offen'+(s.done?' · '+s.done+' ✓':'')+'</span></div>';});
-  if(ohne)h+='<div class="tz-person"><span class="asg-chip asg-none">–</span>nicht zugewiesen <span class="tz-person-n">'+ohne+' offen</span></div>';
-  if(mehrfach)h+='<div class="tz-person" style="border-style:dashed"><span class="tz-person-n">'
-    +mehrfach+' offene auf mehrere verteilt — die Zahlen überschneiden sich</span></div>';
-  return h+'</div>';
-}
 
 // Stehende Besetzung der Bereiche. Steht unter dem Bereichsschalter, weil die
 // Reihenfolge stimmen muss: erst wer im Bereich sitzt, dann was dort zu tun ist.

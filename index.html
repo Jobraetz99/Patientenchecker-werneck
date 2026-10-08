@@ -270,6 +270,10 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--bg)
 .fsw b{font-weight:650;color:var(--faint);margin-left:2px}
 .fsw.a{border-color:var(--primary);color:var(--primary);background:var(--primary-bg)}
 .fsw.a b{color:var(--primary)}
+/* Protokollzustand. Eigene Zeile, damit eine Fehlermeldung nicht hinter dem
+   zugeklappten Teamknopf verschwindet. */
+.auf-zustand{font-size:11.5px;color:var(--muted);margin:-8px 0 14px}
+.auf-zustand-fehler{color:var(--fire);font-weight:550}
 /* Wem die automatisch erledigten zugeordnet werden. Still gehalten: Es ist
    eine Zuordnung über die Zuständigkeit, keine gemessene Leistung. */
 .tz-gperson{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px;
@@ -5750,6 +5754,11 @@ function kennAufgaben(alt,tag){
   // an dem er entsteht — es gibt keine zweite Rechnung.
   aufPensum=pensum;aufPensumTag=heute;
   let entfallen=0;
+  // Wem die entfallenen Aufgaben zugeordnet werden. Mitgeschrieben, nicht nur
+  // angezeigt: Der Team-Report fragt danach über Wochen, und die stehende
+  // Besetzung von heute sagt nichts darüber, wer vorletzten Dienstag Dienst
+  // hatte. Was hier nicht in die Datei kommt, ist morgen nicht mehr zu klären.
+  const entfPerson={};
   if(vollstaendig)Object.keys(pensum).forEach(k=>{
     if(jetzt[k])return;
     entfallen++;
@@ -5761,6 +5770,11 @@ function kennAufgaben(alt,tag){
     const gut=(o,k2)=>{const x=o[k2]||(o[k2]={offen:0,erledigt:0});x.erledigt++;};
     gut(jeKat,kat||'?');
     gut(jeBereich,ber||'ohne');
+    // Zuordnung über die Zuständigkeit: Wer im Bereich dieser Aufgabe
+    // eingeteilt war, bekommt sie gutgeschrieben. Steht dort niemand, wird
+    // niemand erfunden.
+    ((ber&&ber!=='ohne')?getAreaAssign(ber):[]).forEach(o=>{
+      entfPerson[o]=(entfPerson[o]||0)+1;});
   });
   const n=Object.keys(pensum).length;
   const erledigt=stand.fertig+stand.abgelehnt+entfallen;
@@ -5790,6 +5804,9 @@ function kennAufgaben(alt,tag){
       unsicher:!vollstaendig},
     pensum,
     heute:{erledigt:tz.ges,abgelehnt:tz.abg,beteiligt:Object.keys(tz.proPerson||{}).length},
+    // Je Konto-ID die Zahl der an diesem Tag entfallenen Aufgaben. Klein genug
+    // für die Tagesdatei — eine Handvoll Praxismanager, kein Namensregister.
+    entfPerson,
     ueberfaellig,ohneZuweisung,jeBereich,jeKat};
 }
 
@@ -6436,18 +6453,22 @@ function renderTeamBar(){
   }
   h+='</span>';
   h+='<div class="tm-treffer" id="tmTreffer">'+aufSucheMarkup()+'</div>';
-  // Der Zustand des Protokolls gehört sichtbar an die Leiste. Ein Haken, der
-  // nur lokal liegt, sieht sonst genauso aus wie einer, den alle sehen.
+  return h+'</div>';
+}
+
+// Der Zustand des Protokolls. Steht eigenständig, nicht in der Teamleiste: Ein
+// Haken, der nur lokal liegt, sieht sonst aus wie einer, den alle sehen — und
+// eine Fehlermeldung darf nicht hinter einem zugeklappten Knopf verschwinden.
+function aufZustandZeile(){
   const hinweise=[];
-  if(!k)hinweise.push('Nicht angemeldet — Haken bleiben auf diesem Gerät.');
+  if(!meKonto())hinweise.push('Nicht angemeldet — Haken bleiben auf diesem Gerät.');
   else if(!aufBereit)hinweise.push('Protokoll wird geladen…');
   if(aufSchreibt)hinweise.push('speichert…');
   if(aufFehler)hinweise.push(aufFehler);
   if(aufTeamFehler)hinweise.push(aufTeamFehler);
-  if(hinweise.length)
-    h+='<div style="flex-basis:100%;font-size:11.5px;color:'+(aufFehler||aufTeamFehler?'var(--fire)':'var(--muted)')+';margin-top:4px">'
-      +esc(hinweise.join(' · '))+'</div>';
-  return h+'</div>';
+  if(!hinweise.length)return'';
+  return'<div class="auf-zustand'+(aufFehler||aufTeamFehler?' auf-zustand-fehler':'')+'">'
+    +esc(hinweise.join(' · '))+'</div>';
 }
 
 // ── Telefonnummern ─────────────────────────────────────────────────────────
@@ -7564,10 +7585,18 @@ function renderAufgaben(){
   // Bereichsschalter links, die beiden Filter rechts daneben in derselben
   // Zeile. Sie gehören zur Ansicht, nicht zur Liste — und nehmen so keine
   // eigene Zeile mehr weg.
+  const me_=meKonto();
   const filter=(T.dauerAus||zeigeDauer?dauerSchalter(T.dauerAus):'')
-              +(T.hbAus||zeigeHb?hbSchalter(T.hbAus):'');
+    +(T.hbAus||zeigeHb?hbSchalter(T.hbAus):'')
+    +(getTeam().length&&me_
+      ? '<button class="fsw'+(tzOnlyMine?' a':'')+'" onclick="toggleOnlyMine('+(tzOnlyMine?'false':'true')+')"'
+        +' title="Nur Aufgaben zeigen, bei denen ich als zuständig stehe">🙋 nur meine</button>'
+      :'')
+    +'<button class="fsw'+(tzTeamOffen?' a':'')+'" onclick="tzTeamToggle()"'
+      +' title="Praxismanager verwalten — Kollegen hinzufügen oder entfernen">👥 Team</button>';
   h+='<div class="tz-kopfzeile">'+tzAreaBar()
-    +(filter?'<div class="fsw-row">'+filter+'</div>':'')+'</div>';
+    +'<div class="fsw-row">'+filter+'</div></div>';
+  h+=aufZustandZeile();
   // Die Besetzung steht direkt unter dem Bereichsschalter: Sie gehört zur
   // Bereichswahl, nicht zur Liste darunter.
   h+=tzAreaCrew();
@@ -7693,9 +7722,12 @@ function tzPatientenAmTag(tag){
 // Zwei Gründe halten sie trotzdem stehen: „nur meine" filtert gerade (ein
 // Filter, den man nicht sieht, lässt sich nicht abschalten), oder das Protokoll
 // hat etwas zu melden — eine Fehlermeldung darf nirgends verschwinden.
-function tzZeigeTeamBar(){
-  return tzArea==='alle'||!!tzOnlyMine||!!aufFehler||!!aufTeamFehler;
-}
+// Die Teamleiste ist Einrichtung, keine Tagesarbeit: Wer die Praxismanager
+// pflegt, tut das selten. Sie liegt deshalb hinter einem Knopf — außer das Team
+// ist noch leer, dann muss sie aufgehen, sonst findet sie niemand.
+let tzTeamOffen=false;
+function tzTeamToggle(){tzTeamOffen=!tzTeamOffen;renderAufgaben();}
+function tzZeigeTeamBar(){return tzTeamOffen||!getTeam().length;}
 
 function tzAreaCrew(){
   if(!getTeam().length)return'';
@@ -10785,6 +10817,49 @@ function trZaehlen(von,bis){
   return{proPerson,proKat,ges,abg};
 }
 
+// ── Die automatisch Erledigten im Team-Report ──────────────────────────────
+// Sie stehen in KEINEM Protokoll: Niemand hat geklickt, die Aufgabe war
+// irgendwann einfach weg. Festgehalten wird das nur in der Kennzahlendatei, je
+// Tag und je Konto — deshalb liest der Report hier eine zweite Quelle.
+//
+// Gemerkt wird je Monat, weil die Dateien monatsweise liegen und ein Wechsel
+// des Zeitraums sonst jedes Mal neu lädt.
+const trEntfCache={};let trEntfLaedt=false;
+async function trEntfLaden(monate){
+  const offen=monate.filter(m=>!(m in trEntfCache));
+  if(!offen.length)return false;
+  trEntfLaedt=true;
+  try{
+    await Promise.all(offen.map(async m=>{
+      try{const f=await loadJSONAbs(kennDatei(m));
+        trEntfCache[m]=(f&&Array.isArray(f.tage))?f.tage:[];}
+      catch(e){trEntfCache[m]=[];}
+    }));
+  }finally{trEntfLaedt=false;}
+  return true;
+}
+// Summiert die entfallenen Aufgaben je Person über den Zeitraum. Gezählt wird
+// je TAG, nicht je Lauf: In der Datei steht ein Eintrag pro Tag, und der trägt
+// den Stand des letzten Laufs.
+function trEntfallen(von,bis){
+  const aus={proPerson:{},tage:0,ges:0};
+  const v=new Date(von),b=new Date(bis);
+  const vs=v.getFullYear()+'-'+String(v.getMonth()+1).padStart(2,'0')+'-'+String(v.getDate()).padStart(2,'0');
+  const bs=b.getFullYear()+'-'+String(b.getMonth()+1).padStart(2,'0')+'-'+String(b.getDate()).padStart(2,'0');
+  Object.keys(trEntfCache).forEach(m=>{
+    (trEntfCache[m]||[]).forEach(t=>{
+      if(!t||!t.ds||t.ds<vs||t.ds>bs)return;
+      const ep=(t.auf&&t.auf.entfPerson)||null;
+      const n=(t.auf&&t.auf.stand&&t.auf.stand.entfallen)||0;
+      if(n)aus.ges+=n;
+      if(n||ep)aus.tage++;
+      if(!ep)return;
+      Object.keys(ep).forEach(o=>{aus.proPerson[o]=(aus.proPerson[o]||0)+(ep[o]||0);});
+    });
+  });
+  return aus;
+}
+
 function renderTeamReport(){
   const fen=trFenster();
   let h='<div class="summary"><h2>👤 Team-Report</h2>'
@@ -10803,11 +10878,15 @@ function renderTeamReport(){
     document.getElementById('mc').innerHTML=h;return;
   }
   const z=trZaehlen(fen[0],fen[1]);
+  // Die zweite Quelle: Was ohne Haken wegging. Liegt in den Kennzahlendateien,
+  // nicht im Protokoll — deshalb ein eigener Ladevorgang.
+  trEntfLaden(trMonate(fen[0],fen[1])).then(neu=>{if(neu&&curView==='team')renderTeamReport();});
+  const ef=trEntfallen(fen[0],fen[1]);
   const dat=t=>new Date(t).toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'});
   h+='<div style="font-size:12.5px;color:var(--muted);margin:-6px 0 14px">'
     +dat(fen[0])+' bis '+dat(Math.min(fen[1],Date.now()))+'</div>';
 
-  if(!z.ges&&!z.abg){
+  if(!z.ges&&!z.abg&&!ef.ges){
     h+='<div class="empty" style="line-height:1.7">In diesem Zeitraum wurde nichts abgehakt.<br>'
       +'<span style="font-size:12px">Gezählt wird ab dem Tag, an dem das geteilte Protokoll in Betrieb ging — '
       +'was davor auf einzelnen Geräten stand, ist übernommen, aber nicht als Leistung gezählt.</span></div>';
@@ -10819,29 +10898,43 @@ function renderTeamReport(){
   // acht leeren Spalten liest niemand.
   const kats=TZ_REIHE.filter(k=>z.proKat[k]).concat(z.proKat.sonst?['sonst']:[]);
   const katName=k=>k==='sonst'?'Sonstige':((TZ_KAT[k]&&TZ_KAT[k].l)||k);
-  const leute=Object.keys(z.proPerson).map(o=>z.proPerson[o]).sort((a,b)=>b.ges-a.ges||b.abg-a.abg);
+  // Die Personenliste muss beide Quellen kennen: Wer nichts abgehakt, aber
+  // einen Bereich besetzt hat, an dem Aufgaben wegfielen, fehlte sonst ganz.
+  const alleOids=[...new Set(Object.keys(z.proPerson).concat(Object.keys(ef.proPerson)))];
+  const leute=alleOids.map(o=>Object.assign({oid:o,ges:0,abg:0,kat:{}},z.proPerson[o]||{},
+      {entf:ef.proPerson[o]||0}))
+    .sort((a,b)=>(b.ges+b.entf)-(a.ges+a.entf)||b.abg-a.abg);
   // Die Abgelehnt-Spalte erscheint nur, wenn es etwas abzulehnen gab. Eine
   // Spalte voller Striche erzählt nichts und drängt die Kategorien zusammen.
   const zeigeAbg=z.abg>0;
 
-  const top=leute.find(p=>p.ges>0);
-  h+='<div class="sg" style="grid-template-columns:repeat('+(zeigeAbg?4:3)+',1fr);margin-bottom:18px">'
-    +'<div class="si"><div class="si-l">✅ Erledigt</div><div class="si-v">'+z.ges+'</div>'
-      +'<div class="si-s">im gewählten Zeitraum</div></div>'
+  const top=leute.find(p=>(p.ges+p.entf)>0);
+  h+='<div class="sg" style="grid-template-columns:repeat('+(zeigeAbg?5:4)+',1fr);margin-bottom:18px">'
+    +'<div class="si"><div class="si-l">✅ Abgehakt</div><div class="si-v">'+z.ges+'</div>'
+      +'<div class="si-s">jemand hat entschieden</div></div>'
+    +'<div class="si"><div class="si-l">🏁 Ohne Haken</div><div class="si-v">'+ef.ges+'</div>'
+      +'<div class="si-s">'+(ef.tage?'an '+ef.tage+' Tag'+(ef.tage===1?'':'en')+' erfasst':'noch nichts erfasst')+'</div></div>'
     +(zeigeAbg?'<div class="si"><div class="si-l">⊘ Abgelehnt</div><div class="si-v">'+z.abg+'</div>'
       +'<div class="si-s">entschieden, nicht offen</div></div>':'')
     +'<div class="si"><div class="si-l">👥 Beteiligt</div><div class="si-v">'+leute.length+'</div>'
       +'<div class="si-s">'+(leute.length===1?'Person hat entschieden':'Personen haben entschieden')+'</div></div>'
     +'<div class="si"><div class="si-l">🥇 Die meisten</div><div class="si-v" style="font-size:18px">'
-      +esc(top?personName(top.oid):'–')+'</div><div class="si-s">'+(top?top.ges+' Aufgaben':'')+'</div></div>'
+      +esc(top?personName(top.oid):'–')+'</div><div class="si-s">'
+      +(top?(top.ges+top.entf)+' Aufgaben':'')+'</div></div>'
     +'</div>';
 
   h+='<div class="vl-card"><table class="data-t"><thead><tr><th>Person</th>';
   kats.forEach(k=>{h+='<th class="r">'+esc(katName(k))+'</th>';});
-  h+='<th class="r">Gesamt</th>';
+  h+='<th class="r">Abgehakt</th>';
+  // Getrennte Spalte, keine Addition in „Abgehakt": Das eine ist eine
+  // Entscheidung aus dem Protokoll, das andere eine Zuordnung über den
+  // Bereich, in dem die Person an dem Tag eingeteilt war.
+  h+='<th class="r" title="Aufgaben, die an einem Tag aus der Liste fielen, '
+    +'während diese Person den zuständigen Bereich besetzt hatte. Zugeordnet über '
+    +'die Besetzung, nicht aus dem Protokoll — niemand hat hier geklickt.">🏁 Ohne Haken</th>';
   // Hinter dem Gesamt, nicht davor: Die Summe gehört zu den Kategorien links
   // von ihr. Abgelehnt steht daneben, weil es nicht hineinzählt.
-  if(zeigeAbg)h+='<th class="r" title="Abgelehnt — zählt nicht in „Gesamt“">⊘ Abgelehnt</th>';
+  if(zeigeAbg)h+='<th class="r" title="Abgelehnt — zählt nicht in „Abgehakt“">⊘ Abgelehnt</th>';
   h+='</tr></thead><tbody>';
   leute.forEach(p=>{
     h+='<tr><td><span class="asg-chip" style="background:'+teamColor(p.oid)+';margin-right:7px">'
@@ -10849,12 +10942,19 @@ function renderTeamReport(){
     kats.forEach(k=>{const n=p.kat[k]||0;
       h+='<td class="r"'+(n?'':' style="color:var(--faint)"')+'>'+(n||'–')+'</td>';});
     h+='<td class="r"><b>'+p.ges+'</b></td>';
+    h+='<td class="r"'+(p.entf?'':' style="color:var(--faint)"')+'>'+(p.entf||'–')+'</td>';
     if(zeigeAbg)h+='<td class="r"'+(p.abg?'':' style="color:var(--faint)"')+'>'+(p.abg||'–')+'</td>';
     h+='</tr>';
   });
   h+='<tr style="border-top:2px solid var(--border)"><td><b>Alle</b></td>';
   kats.forEach(k=>{h+='<td class="r"><b>'+(z.proKat[k]||0)+'</b></td>';});
   h+='<td class="r"><b>'+z.ges+'</b></td>';
+  // Die Spaltensumme ist NICHT die Summe der Zeilen: Besetzen zwei Leute
+  // denselben Bereich, bekommen beide dieselbe Aufgabe gutgeschrieben. Hier
+  // steht deshalb die Zahl der Aufgaben, nicht die Summe der Gutschriften.
+  h+='<td class="r" title="Zahl der Aufgaben. Besetzen zwei Personen einen '
+    +'Bereich, steht dieselbe Aufgabe bei beiden — die Spalte darüber summiert '
+    +'sich deshalb höher."><b>'+ef.ges+'</b></td>';
   if(zeigeAbg)h+='<td class="r"><b>'+z.abg+'</b></td>';
   h+='</tr>';
   h+='</tbody></table></div>';

@@ -7307,6 +7307,15 @@ function tzTage(locId){
 // Der Tagesbestand für die gewählten Standorte. Bei einem Standort ist das
 // unverändert buildTasks; bei „Alle" werden die Listen aneinandergehängt und
 // jede Aufgabe trägt ihren Standort mit.
+// Die Kurzschlüssel ALLER Aufgaben des Tages — ohne die Anzeige-Schalter.
+// Genau so baut kennAufgaben das Pensum; nur wenn beide Seiten dieselbe Liste
+// meinen, ist die Differenz eine Aussage.
+function aufAlleKurz(tag){
+  const d=zeigeDauer,h=zeigeHb;
+  try{zeigeDauer=true;zeigeHb=true;return tzBuildTasks(tag).alle.map(t=>aufKurz(t.id));}
+  catch(e){return[];}
+  finally{zeigeDauer=d;zeigeHb=h;}
+}
 function tzBuildTasks(tag){
   const ids=tzLocIds();
   if(ids.length===1)return buildTasks(ids[0],tag?tag.sub:'heute',tag?tag.ds:null);
@@ -7449,7 +7458,16 @@ function renderAufgaben(){
   // Nur am Tag des Exports: Für gestern liegt kein Pensum vor, und für morgen
   // gibt es keins. Dort bleibt die Zahl, was sie war.
   const istPensumTag=!!(tag&&aufPensumTag&&tag.ds===aufPensumTag);
-  const drin=new Set(T.alle.map(t=>aufKurz(t.id)));
+  // Verglichen wird gegen die VOLLSTÄNDIGE Liste, nicht gegen die gefilterte.
+  //
+  // Das Pensum entsteht in kennAufgaben mit beiden Schaltern an — es soll ja
+  // festhalten, was an dem Tag überhaupt anlag. Die Anzeige blendet dagegen
+  // Dauerpatienten und Hausbesuche aus, wenn die Schalter aus sind. Gegen die
+  // gefilterte Liste gerechnet galt jede ausgeblendete Aufgabe als erledigt:
+  // Am 08.10.2026 waren das 68 Zeilen, die als „durch Erledigen der Ursache"
+  // dastanden, obwohl nur ein Schalter aus war. Ein Häkchen umzulegen ist keine
+  // Arbeit am Patienten.
+  const drin=new Set(aufAlleKurz(tag));
   const ent=istPensumTag?aufEntfallen(drin,tzArea,tzLoc):{n:0,jeKat:{}};
   const fertig=abgehakt+ent.n;
   const gesamt=liste.length+ent.n;

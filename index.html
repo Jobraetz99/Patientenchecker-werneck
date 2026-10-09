@@ -5471,6 +5471,49 @@ const KENN_DIR='/12_Code/Patientenchecker/Dateien Export/kennzahlen/';
 const KENN_V=4;
 function kennDatei(monat){return KENN_DIR+'kennzahlen-'+monat+'.json';}
 
+// ── Die Aufgabenliste des Tages ────────────────────────────────────────────
+// Die Kennzahlendatei hält die ZAHLEN eines Tages fest. Für die Frage „was war
+// da eigentlich los" reicht das nicht — dafür braucht es die Liste selbst.
+//
+// Sie bekommt eine eigene Datei JE TAG. Rund 95 KB, und geladen wird immer nur
+// die eine, die man gerade ansieht. In der Monatsdatei stünden am Monatsende
+// zwei Megabyte, die beide Dashboards bei jedem Öffnen mitziehen müssten.
+//
+// Gespeichert wird nur, was sich NICHT rekonstruieren lässt: die Aufgaben
+// selbst. Status, Notiz, Zuständige und Frist stehen im Protokoll und werden
+// von dort geholt — sonst lägen dieselben Angaben doppelt, und die Kopie wäre
+// die, die irgendwann veraltet.
+const TZL_V=1;
+function tzlDatei(ds){return KENN_DIR+'tagesziel/tagesziel-'+ds+'.json';}
+// Als Arrays statt als Objekte: bei 640 Zeilen spart das ein Viertel der Datei,
+// und die Reihenfolge steht hier direkt daneben.
+const TZL_FELD=['id','cat','txt','sub','name','pid','loc'];
+function tzlPacken(alle){
+  return(alle||[]).map(t=>TZL_FELD.map(f=>t[f]==null?'':String(t[f])));
+}
+function tzlEntpacken(rows){
+  return(rows||[]).map(r=>{const o={};TZL_FELD.forEach((f,i)=>{o[f]=r[i]||'';});
+    o.ico=(TZ_KAT[o.cat]&&TZ_KAT[o.cat].ico)||'•';return o;});
+}
+async function tzlSchreiben(ds,alle){
+  if(!ds||!alle)return false;
+  try{return await saveJSONAbs(tzlDatei(ds),
+    {v:TZL_V,ds,stand:Date.now(),n:alle.length,tasks:tzlPacken(alle)});}
+  catch(e){return false;}
+}
+// Gemerkt je Tag. `false` heißt „nachgesehen, gibt es nicht" — das ist etwas
+// anderes als „noch nicht nachgesehen" und darf nicht erneut laden.
+const tzlCache={};
+async function tzlLaden(ds){
+  if(ds in tzlCache)return tzlCache[ds];
+  tzlCache[ds]=null;
+  try{
+    const f=await loadJSONAbs(tzlDatei(ds));
+    tzlCache[ds]=(f&&f.v===TZL_V&&Array.isArray(f.tasks))?tzlEntpacken(f.tasks):false;
+  }catch(e){tzlCache[ds]=false;}
+  return tzlCache[ds];
+}
+
 // ── Das Tagespensum im Blick des Praxismanagers ────────────────────────────
 // Dieselbe Buchführung, die kennAufgaben für das Management-Dashboard
 // schreibt, muss auch hier sichtbar sein. Sonst passiert genau das, was der
@@ -5483,6 +5526,9 @@ function kennDatei(monat){return KENN_DIR+'kennzahlen-'+monat+'.json';}
 // für den Tag des Exports. Zwei Implementierungen derselben Zahl liefen sonst
 // auseinander, und danach traut man keiner.
 let aufPensum={},aufPensumTag='';
+// Die vollständige Aufgabenliste des letzten Laufs — der Rohstoff für die
+// Tagesdatei. Steht hier, weil kennAufgaben sie ohnehin baut.
+let aufTagesListe=null;
 // Sind die Quellen des Tages überhaupt vollständig geladen?
 //
 // „Erledigt durch die Ursache" wird durch VERGLEICH erkannt: Was im Pensum
@@ -5751,6 +5797,11 @@ function kennAufgaben(alt,tag){
       try{alle=alle.concat(buildTasks(l.id,'heute',heuteDs).alle);}catch(e){}
     });
   }finally{zeigeDauer=dauerVor;zeigeHb=hbVor;}
+  // Dieselbe vollständige Liste, die auch das Pensum speist, wandert in die
+  // Tagesdatei. Ein zweiter Durchlauf wäre nicht nur Arbeit, sondern ein
+  // zweites Ergebnis — und dann stimmte die Liste von gestern nicht mehr mit
+  // den Zahlen von gestern überein.
+  aufTagesListe=alle;
 
   const heute=tag||isoDay(0),gesehen={};
   const stand={offen:0,arbeit:0,fertig:0,abgelehnt:0};
@@ -5910,7 +5961,19 @@ function kennBau(vorhanden){
 async function kennSchreiben(){
   const pfad=kennDatei(aufMonatVon(Date.now()));
   let alt=null;try{alt=await loadJSONAbs(pfad);}catch(e){}
-  return await saveJSONAbs(pfad,kennBau(alt));
+  const datei=kennBau(alt);
+  const ok=await saveJSONAbs(pfad,datei);
+  // Die Aufgabenliste des Tages daneben. Eigene Datei, eigener Fehlerfall: Ein
+  // Fehlschlag hier darf die Kennzahlen nicht mitreißen — die sind die
+  // wichtigere Zahl, die Liste ist die Bequemlichkeit.
+  try{
+    const tag=kennDatenTag();
+    if(tag&&aufTagesListe){
+      await tzlSchreiben(tag,aufTagesListe);
+      tzlCache[tag]=aufTagesListe;
+    }
+  }catch(e){}
+  return ok;
 }
 // Erst nach dem Aufgabenprotokoll. Vorher stünde jede Aufgabe als „offen" in
 // der Datei, deren Haken noch in einer ungelesenen Monatsdatei liegt — und das
@@ -7577,9 +7640,9 @@ function tzSetRueck(ds){tzRueck=ds||null;renderAufgaben();}
 function renderRueckblick(ds){
   const t=kennTagAus(ds),a=(t&&t.auf)||null,st=(a&&a.stand)||null;
   let h='<div class="summary"><h2>🗓️ Rückblick · '+esc(tzLabel(ds))+'</h2>'
-    +'<div class="tz-lead">Was an diesem Tag anlag und was davon wegging. '
-    +'Aus der Kennzahlendatei — der Terminplan von damals liegt nicht mehr vor, '
-    +'einzelne Namen stehen deshalb nicht dabei.</div></div>';
+    +'<div class="tz-lead">Dieselbe Ansicht wie heute, nur für einen vergangenen Tag. '
+    +'Die Aufgaben kommen aus der Tagesdatei, Status und Notizen aus dem Protokoll — '
+    +'du siehst also auch, was jemand damals entschieden und dazugeschrieben hat.</div></div>';
   h+=tzRueckNav(ds);
   if(!t){
     h+='<div class="empty" style="line-height:1.7">Für diesen Tag liegen keine Zahlen vor.<br>'
@@ -7605,36 +7668,27 @@ function renderRueckblick(ds){
       +'</div>';
     if(st.unsicher)h+='<div class="auf-zustand auf-zustand-fehler" style="margin-bottom:14px">'
       +'An diesem Tag fehlten Standortdaten. „Ohne Haken" steht deshalb zu niedrig, nicht zu hoch.</div>';
-    // Je Kategorie: was anlag und was davon wegging.
-    const jk=a.jeKat||{};
-    const kats=TZ_REIHE.filter(k=>jk[k]).concat(jk.sonst?['sonst']:[]);
-    if(kats.length){
-      h+='<div class="st" style="cursor:default">🏁 Was an diesem Tag wegging</div>';
-      h+='<div class="vl-card"><table class="data-t"><thead><tr><th>Kategorie</th>'
-        +'<th class="r">lag an</th><th class="r">erledigt</th><th class="r">blieb offen</th></tr></thead><tbody>';
-      kats.forEach(k=>{const v=jk[k]||{},o=v.offen||0,e=v.erledigt||0;
-        const K=TZ_KAT[k]||{l:k==='sonst'?'Sonstige':k,ico:'•'};
-        h+='<tr><td>'+esc((K.ico||'')+' '+K.l)+'</td>'
-          +'<td class="r">'+(o+e)+'</td>'
-          +'<td class="r"><b>'+e+'</b></td>'
-          +'<td class="r"'+(o?'':' style="color:var(--faint)"')+'>'+(o||'–')+'</td></tr>';});
-      h+='</tbody></table></div>';
-    }
-    // Je Person — nur wenn der Tag sie mitgeschrieben hat.
-    const ep=a.entfPerson||null;
-    if(ep&&Object.keys(ep).length){
-      h+='<div class="st" style="cursor:default">👤 Zugeordnet über die Besetzung</div>';
-      h+='<div class="vl-card"><table class="data-t"><thead><tr><th>Person</th>'
-        +'<th class="r">ohne Haken</th></tr></thead><tbody>';
-      Object.keys(ep).sort((x,y)=>ep[y]-ep[x]).forEach(o=>{
-        h+='<tr><td><span class="asg-chip" style="background:'+teamColor(o)+';margin-right:7px">'
-          +esc(teamInitials(o))+'</span>'+esc(personName(o))+'</td>'
-          +'<td class="r"><b>'+ep[o]+'</b></td></tr>';});
-      h+='</tbody></table></div>';
-    }else if(ent){
-      h+='<div class="auf-zustand" style="margin-bottom:14px">An diesem Tag wurde noch nicht '
-        +'mitgeschrieben, wer den jeweiligen Bereich besetzt hatte.</div>';
-    }
+  }
+  // ── Die Liste selbst ────────────────────────────────────────────────────
+  // Dieselbe Ansicht wie heute, nicht eine Zahlentabelle daneben. Die Aufgaben
+  // kommen aus der Tagesdatei, Status und Notizen aus dem Protokoll — das ist
+  // dieselbe Quelle, aus der auch das Tagesziel liest.
+  const roh=tzlCache[ds];
+  if(roh===undefined){
+    h+='<div class="empty">Aufgabenliste wird geladen…</div>';
+  }else if(roh===false){
+    h+='<div class="empty" style="line-height:1.7">Für diesen Tag wurde die Liste noch nicht mitgeschrieben.<br>'
+      +'<span style="font-size:12px">Die Zahlen oben stehen trotzdem. Ab dem 09.10.2026 wird jeden Tag '
+      +'auch die Liste gespeichert.</span></div>';
+  }else{
+    // Gefiltert wie heute: Bereich, Standort und die beiden Schalter gelten
+    // auch rückwärts. Sonst sähe derselbe Tag in zwei Reitern verschieden aus.
+    let liste=roh.filter(t=>tzArea==='alle'||effectiveArea(t.id,t.cat)===tzArea);
+    if(tzLoc!==TZ_ALLE)liste=liste.filter(t=>!t.loc||t.loc===tzLoc);
+    const me=getMe();
+    if(tzOnlyMine&&me)liste=liste.filter(t=>istMeine(t.id,t.cat,me));
+    h+='<div class="st" style="cursor:default">📋 Die Liste dieses Tages · '+liste.length+'</div>';
+    h+=tzListe(liste,ds);
   }
   // Auslastung und Telefonie des Tages stehen ohnehin in der Datei.
   const locs=t.loc||{};
@@ -7684,8 +7738,16 @@ function tzRueckNav(ds){
 function renderAufgaben(){
   // Vergangenheit: eigene Ansicht, eigene Quelle.
   if(tzRueck){
-    trEntfLaden(trMonate(new Date(tzRueck).getTime(),Date.now()))
+    const ts=new Date(tzRueck).getTime();
+    // Drei Quellen für einen vergangenen Tag: die Kennzahlen (Zahlen), die
+    // Tagesdatei (Liste) und das Protokoll des Monats (Status, Notizen). Jede
+    // meldet sich mit einem Neuzeichnen, sobald sie da ist.
+    trEntfLaden(trMonate(ts,Date.now()))
       .then(neu=>{if(neu&&curView==='tagesziel'&&tzRueck)renderAufgaben();});
+    if(!(tzRueck in tzlCache))tzlLaden(tzRueck)
+      .then(()=>{if(curView==='tagesziel'&&tzRueck)renderAufgaben();});
+    try{aufLadeMonate([aufMonatVon(ts)]).then(()=>{
+      if(curView==='tagesziel'&&tzRueck)renderAufgaben();});}catch(e){}
     return renderRueckblick(tzRueck);
   }
   const tage=tzTage(tzLoc);

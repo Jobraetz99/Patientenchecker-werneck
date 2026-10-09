@@ -8021,7 +8021,11 @@ function tzZeile(t){
     +taskMeta(t.id,t.cat,titel)+'</div>';
 }
 
-const TZ_ZIEL={luecke:"switchView('luecken')",lueckeM:"switchView('luecken')",abr:"switchView('offene')",fvo:"switchView('folgevo')",verplan:"switchView('verplanung')",vplOhne:"switchView('verplanung')",ft:"switchView('offene')",dauer:"switchView('potential')",rezende:"switchView('rezende')"};
+// „Tab öffnen" nimmt die Standortwahl mit. Ohne das landet man im Reiter auf
+// einem anderen Standort als in der Liste, aus der man gerade kam — und hält
+// die abweichende Zahl für einen Fehler.
+function tzZuVerplanung(){vpLoc=tzLoc;switchView('verplanung');}
+const TZ_ZIEL={luecke:"switchView('luecken')",lueckeM:"switchView('luecken')",abr:"switchView('offene')",fvo:"switchView('folgevo')",verplan:"tzZuVerplanung()",vplOhne:"tzZuVerplanung()",ft:"switchView('offene')",dauer:"switchView('potential')",rezende:"switchView('rezende')"};
 
 function tzListe(liste,tagDs){
   const team=getTeam();
@@ -8323,22 +8327,36 @@ function fvListe(){
 // geplant. Dieser Reiter fuehrt beides zusammen, weil die Handlung dieselbe
 // ist: Termine legen. Nur die Dringlichkeit unterscheidet sich, und genau die
 // zeigen die drei Zustaende.
-let vpLoc=LOCS[0]?LOCS[0].id:'wp';
+// Der Reiter hatte eine EIGENE Standortwahl und startete auf dem ersten
+// Standort. Im Tagesziel stand derweil „Alle" — dieselbe Sache zeigte deshalb
+// zwei verschiedene Zahlen (58 gegen 38), ohne dass irgendwo stand, warum.
+// Jetzt kennt der Reiter dieselbe Auswahl inklusive „Alle".
+let vpLoc=TZ_ALLE;
 let vpSuche='';
 let vpZFilter='alle';
 function vpSetLoc(id){vpLoc=id;renderVerplanung();}
 function vpSetZ(z){vpZFilter=z;renderVerplanung();}
 function vpSuchen(v){vpSuche=(v||'').toLowerCase();vpListe();}
 
+// Die Patienten eines Standorts — oder aller. Bei „Alle" werden die Listen
+// aneinandergehängt; ein Patient kann an beiden Standorten laufen (Physio UND
+// Ergo), und das sind zwei Rezeptlagen, nicht eine.
+function vpAlleRoh(locId){
+  if(locId!==TZ_ALLE)return buildVerplanung(locId).map(r=>Object.assign({loc:locId},r));
+  let aus=[];
+  LOCS.forEach(l=>{aus=aus.concat(buildVerplanung(l.id).map(r=>Object.assign({loc:l.id},r)));});
+  return aus.sort((a,b)=>VP_ZUST[a.zust].rang-VP_ZUST[b.zust].rang||b.rest-a.rest
+    ||String(a.name).localeCompare(String(b.name)));
+}
 function vpRows(locId){
-  let rows=buildVerplanung(locId);
+  let rows=vpAlleRoh(locId);
   if(!zeigeDauer)rows=rows.filter(r=>!r.dauer);
   if(!zeigeHb)rows=rows.filter(r=>!r.hb);
   return rows;
 }
 function renderVerplanung(){
-  const loc=LOCS.find(l=>l.id===vpLoc)||LOCS[0];
-  const alle=buildVerplanung(vpLoc);
+  const loc=vpLoc===TZ_ALLE?{label:'Alle Standorte'}:(LOCS.find(l=>l.id===vpLoc)||LOCS[0]);
+  const alle=vpAlleRoh(vpLoc);
   const dauerRows=alle.filter(r=>r.dauer);
   const rows=vpRows(vpLoc);
   const zN=z=>rows.filter(r=>r.zust===z).length;
@@ -8392,7 +8410,8 @@ function renderVerplanung(){
   h+='<div class="ft">KIMOJO · Verplanung</div>';
   document.getElementById('mc').innerHTML=h;
   const el=document.getElementById('vpLocTabs');
-  let t='';LOCS.forEach(l=>{t+='<button class="tab'+(vpLoc===l.id?' a':'')+'" onclick="vpSetLoc(\''+l.id+'\')">'+esc(l.label)+'</button>';});
+  let t='<button class="tab'+(vpLoc===TZ_ALLE?' a':'')+'" onclick="vpSetLoc(\''+TZ_ALLE+'\')">Alle</button>';
+  LOCS.forEach(l=>{t+='<button class="tab'+(vpLoc===l.id?' a':'')+'" onclick="vpSetLoc(\''+l.id+'\')">'+esc(l.label)+'</button>';});
   el.innerHTML=t;
   vpListe();
 }

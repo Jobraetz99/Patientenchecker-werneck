@@ -3579,11 +3579,25 @@ function buildOffeneTV(voRoh,standort,heuteDs,dd,hist){
     // Ein Termin **heute** zählt als offen, nicht als gelaufen — die Einheit ist
     // ja noch nicht erbracht.
     const mengeDurch=(tv!=null&&tv>=kann)||(gel>=kann&&ohneTermin);
+    // Ist das Rezept schon aus dem Haus? „Versandt" heißt: an die Abrechnung
+    // gegeben; „Rechnung" heißt: dort ist eine Rechnung daraus geworden. In
+    // beiden Fällen ist in der Praxis nichts mehr zu tun.
+    //
+    // Das war der Fehler: Gezählt wurde nur `hatAktuelleRechnungen`, und das
+    // steht bei 121 der 558 versandten Rezepte auf false — weil das
+    // Abrechnungszentrum noch keine Rechnung erzeugt hat. Dadurch standen am
+    // 09.10.2026 **108 längst versandte Rezepte** unter „Fertig, nicht
+    // abgerechnet" und sahen aus wie Arbeit. Echte Arbeit waren 81.
+    const anAbrechnung=(v.status==='Versandt'||v.status==='Rechnung');
     let kat=null;
     if(v.rechnungOffen)kat='rgOffen';
-    else if(kann>0&&mengeDurch&&!v.hatAktuelleRechnungen)kat='fertig';
+    else if(kann>0&&mengeDurch&&!v.hatAktuelleRechnungen&&!anAbrechnung)kat='fertig';
     else if(v.status==='InBehandlung'&&kann>0&&gel>0&&gel<kann&&ohneTermin)kat='steck';
-    else if(zzOffen&&v.status==='Abgeschlossen')kat='zuzahlung';
+    // Zuzahlung: fällig oder nicht entscheidet die TERMINLAGE, nicht der
+    // Status. Der Zweig hing vorher an `status==='Abgeschlossen'` — den vergibt
+    // thevea bei 2 von 1.200 Rezepten. Praktisch fiel deshalb alles in
+    // „laufend", auch die 68, bei denen längst nichts mehr lief.
+    else if(zzOffen&&mengeDurch&&ohneTermin)kat='zuzahlung';
     else if(zzOffen)kat='zuzahlungLaufend';
     if(!kat)return;
     out.push({id:v.id,
@@ -3611,11 +3625,11 @@ function buildOffeneTV(voRoh,standort,heuteDs,dd,hist){
 }
 
 const OFFEN_KAT={
-  fertig   :{l:'Fertig, nicht abgerechnet',b:'b-red',  t:'Alle verordneten Einheiten liegen als Termin in der Vergangenheit, kein Termin mehr offen, abgerechnet ist nichts'},
+  fertig   :{l:'Fertig, nicht abgerechnet',b:'b-red',  t:'Alle verordneten Einheiten liegen als Termin in der Vergangenheit, kein Termin mehr offen — und das Rezept ist noch nicht an die Abrechnung gegeben. Versandte Rezepte stehen hier NICHT: dort ist in der Praxis nichts mehr zu tun.'},
   steck    :{l:'Steckengeblieben',         b:'b-amber',t:'Ein Teil der Einheiten ist terminlich durch, der Rest ist nicht terminiert — die Restmenge verfällt'},
   rgOffen  :{l:'Rechnung offen',           b:'b-amber',t:'Rechnung gestellt und noch nicht bezahlt'},
-  zuzahlung:{l:'Zuzahlung offen',          b:'b-teal', t:'Rezept abgeschlossen, Zuzahlung weder kassiert noch berechnet'},
-  zuzahlungLaufend:{l:'Zuzahlung (laufend)',b:'b-teal',t:'Rezept läuft noch, Zuzahlung wird üblicherweise am Ende kassiert'}
+  zuzahlung:{l:'Zuzahlung fällig',         b:'b-teal', t:'Die verordnete Menge ist erbracht und es steht kein Termin mehr an — die Zuzahlung ist weder kassiert noch berechnet. Hier lässt sich kassieren.'},
+  zuzahlungLaufend:{l:'Zuzahlung (laufend)',b:'b-teal',t:'Das Rezept läuft noch: Es steht ein Termin an oder die Menge ist nicht durch. Kassiert wird üblicherweise am Ende.'}
 };
 
 // ── Die Erstbefundung ist keine Terminmenge ────────────────────────────────

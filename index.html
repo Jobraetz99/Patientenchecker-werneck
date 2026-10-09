@@ -5526,6 +5526,25 @@ async function tzlLaden(ds){
 // für den Tag des Exports. Zwei Implementierungen derselben Zahl liefen sonst
 // auseinander, und danach traut man keiner.
 let aufPensum={},aufPensumTag='';
+// Die Fassung der Aufgabenregeln.
+//
+// Ändert sich, WAS als Aufgabe gilt, ist das Pensum von heute früh nicht mehr
+// mit der Liste von heute mittag vergleichbar — und der Unterschied sähe aus
+// wie geleistete Arbeit. Am 09.10.2026 habe ich mittags die Definition von
+// „Fertig, nicht abgerechnet" korrigiert; 109 Rezepte fielen dadurch aus der
+// Liste und standen nachmittags als „durch Erledigen der Ursache" da. Niemand
+// hatte sie angefasst.
+//
+// Steigt diese Zahl, wird das Pensum des laufenden Tages verworfen und neu
+// begonnen. Das kostet die Erfolge, die an dem Tag schon gezählt waren — aber
+// erfundene Erfolge sind teurer als verlorene.
+//
+// ERHÖHEN, sobald sich ändert, was in buildTasks oder in den Quellen dahinter
+// (buildOffeneTV, buildVerplanung, buildFolgeVO …) als Aufgabe gilt.
+const AUF_REGEL=2;
+// Wurde das Pensum heute wegen einer Regeländerung verworfen? Nur für den
+// Hinweis im Reiter — eine Zahl, die bei null anfängt, muss sagen warum.
+let aufRegelNeu=false;
 // Die vollständige Aufgabenliste des letzten Laufs — der Rohstoff für die
 // Tagesdatei. Steht hier, weil kennAufgaben sie ohnehin baut.
 let aufTagesListe=null;
@@ -5558,8 +5577,15 @@ function aufEntfallen(drin,area,locId){
   // die Einträge von heute früh aus dem Pensum gelaufen sind.
   const out={n:0,jeKat:{},jeKatGes:{},jePerson:{},ohneBer:0,ohneLoc:0};
   Object.keys(aufPensum).forEach(k=>{
-    const[kat,ber,loc]=String(aufPensum[k]).split('|');
+    const[kat,ber,loc,kenn]=String(aufPensum[k]).split('|');
     if(area&&area!=='alle'&&ber!==area)return;
+    // Dieselben Schalter wie in der Liste darunter. Zähler UND Nenner müssen
+    // dieselbe Menge meinen — sonst steht „8 von 130" über einer Liste mit 57
+    // Zeilen, und beide Zahlen sind für sich richtig.
+    if(kenn){
+      if(!zeigeDauer&&kenn.indexOf('d')>=0)return;
+      if(!zeigeHb&&kenn.indexOf('h')>=0)return;
+    }
     // Standortwahl: Alles, was nicht hierher gehört, fällt raus — auch die
     // älteren Einträge ohne Standortangabe. Zähler und Nenner müssen dieselbe
     // Menge meinen, sonst stünde „9 von 27" über zwei verschiedenen Mengen.
@@ -5807,7 +5833,7 @@ function kennAufgaben(alt,tag){
   const stand={offen:0,arbeit:0,fertig:0,abgelehnt:0};
   const jeBereich={},jeKat={};
   let ueberfaellig=0,ohneZuweisung=0;
-  // Kurzschlüssel -> „Kategorie|Bereich|Standort". Alle drei, weil die Aufgabe
+  // Kurzschlüssel -> „Kategorie|Bereich|Standort|Kennzeichen". Alle vier, weil die Aufgabe
   // beim nächsten Lauf weg sein kann und dann niemand mehr nachsehen könnte,
   // wohin sie gehörte. Drei Angaben in einer Zeichenkette statt in drei
   // Feldern: Die Liste steht sechshundertfach in einer Datei, die beide
@@ -5819,7 +5845,11 @@ function kennAufgaben(alt,tag){
     // steht auch unter dem Folgetag). Gezählt wird jede ID genau einmal.
     if(!t||!t.id||gesehen[t.id])return;gesehen[t.id]=1;
     const ber=effectiveArea(t.id,t.cat)||'ohne';
-    jetzt[aufKurz(t.id)]=t.cat+'|'+ber+'|'+(t.loc||'');
+    // Das Kennzeichen sagt, ob einer der beiden Anzeige-Schalter diese Aufgabe
+    // ausblendet. Ohne es zählte der Nenner im Block „Heute weggearbeitet"
+    // Hausbesuche mit, die in der Liste darunter gar nicht stehen — „8 von 130"
+    // über einer Liste mit 57 Zeilen.
+    jetzt[aufKurz(t.id)]=t.cat+'|'+ber+'|'+(t.loc||'')+'|'+(t.dauer?'d':'')+(t.hb?'h':'');
     const st=taskStatus(t.id),weg=(st==='fertig'||st==='abgelehnt');
     stand[st]=(stand[st]||0)+1;
     const topf=(o,k)=>{const x=o[k]||(o[k]={offen:0,erledigt:0});if(weg)x.erledigt++;else x.offen++;};
@@ -5834,7 +5864,11 @@ function kennAufgaben(alt,tag){
   // Pensum = alles vom bisherigen Tag plus alles, was jetzt dasteht. Neue
   // Aufgaben dürfen im Lauf des Tages dazukommen — eine Absage reißt eine neue
   // Lücke, und die gehört zum Pensum dieses Tages.
-  const pensum=Object.assign({},(alt&&alt.pensum)||{},jetzt);
+  // Nur ein Pensum aus derselben Regelfassung darf fortgeschrieben werden.
+  const regelAlt=(alt&&alt.regel)||0;
+  const passt=!alt||regelAlt===AUF_REGEL;
+  aufRegelNeu=!!(alt&&!passt);
+  const pensum=Object.assign({},(passt&&alt&&alt.pensum)||{},jetzt);
   // Die Anzeige liest denselben Stand. Das Zuweisen hier ist der einzige Ort,
   // an dem er entsteht — es gibt keine zweite Rechnung.
   aufPensum=pensum;aufPensumTag=heute;
@@ -5892,6 +5926,8 @@ function kennAufgaben(alt,tag){
     // Je Konto-ID die Zahl der an diesem Tag entfallenen Aufgaben. Klein genug
     // für die Tagesdatei — eine Handvoll Praxismanager, kein Namensregister.
     entfPerson,
+    // Die Regelfassung, unter der dieses Pensum entstanden ist.
+    regel:AUF_REGEL,
     ueberfaellig,ohneZuweisung,jeBereich,jeKat};
 }
 
@@ -7341,7 +7377,7 @@ function buildTasks(locId,subKey,ds){
   const fvAlle=buildFolgeVO(locId).filter(f=>f.dringend||f.weg!=='ausgeschoepft');
   if(!zeigeDauer)dauerAus+=fvAlle.filter(f=>f.dauer).length;
   fvAlle.filter(f=>zeigeDauer||!f.dauer)
-    .forEach(f=>push(f.pid,{id:f.id,cat:'fvo',ico:'📄',
+    .forEach(f=>push(f.pid,{id:f.id,cat:'fvo',ico:'📄',dauer:!!f.dauer,
       txt:'Folge-VO anfordern',sub:f.sub,name:f.name}));
 
   // 2b) Rezept-Ende ansprechen — der Patient hat an DIESEM Tag seinen letzten
@@ -7379,7 +7415,7 @@ function buildTasks(locId,subKey,ds){
   if(!zeigeDauer)dauerAus+=vpAlle.filter(r=>r.dauer).length;
   if(!zeigeHb)hbAus+=vpAlle.filter(r=>r.hb&&(zeigeDauer||!r.dauer)).length;
   vpAlle.filter(r=>(zeigeDauer||!r.dauer)&&(zeigeHb||!r.hb))
-    .forEach(r=>push(r.pid,{id:'vpl|'+r.pid,cat:'verplan',ico:'🗓️',
+    .forEach(r=>push(r.pid,{id:'vpl|'+r.pid,cat:'verplan',ico:'🗓️',dauer:!!r.dauer,hb:!!r.hb,
       txt:VP_ZUST[r.zust].l==='Steckengeblieben'?'Rezept steckt — Rest verplanen'
          :'Rezept fertig verplanen',
       sub:vpSub(r),name:r.name}));
@@ -7407,7 +7443,7 @@ function buildTasks(locId,subKey,ds){
     if(!zeigeDauer)dauerAus+=vpOhne.filter(r=>r.dauer).length;
     if(!zeigeHb)hbAus+=vpOhne.filter(r=>r.hb&&(zeigeDauer||!r.dauer)).length;
     vpOhne.filter(r=>(zeigeDauer||!r.dauer)&&(zeigeHb||!r.hb))
-      .forEach(r=>push(r.pid,{id:'vplo|'+r.pid,cat:'vplOhne',ico:'☎️',
+      .forEach(r=>push(r.pid,{id:'vplo|'+r.pid,cat:'vplOhne',ico:'☎️',dauer:!!r.dauer,hb:!!r.hb,
         txt:r.zust==='steck'?'Rezept steckt — anrufen und Rest legen'
            :r.zust==='neu'?'Rezept ohne Termin — anrufen und verplanen'
            :'Restmenge noch nicht gelegt — anrufen',
@@ -7428,7 +7464,7 @@ function buildTasks(locId,subKey,ds){
   //    Wer schon Dauerpatient ist, hat den festen Platz bereits — er faellt raus.
   const dpAlle=dauerFuerTag(locId,ds,true);
   if(!zeigeDauer)dauerAus+=dpAlle.filter(r=>r.dauer).length;
-  dpAlle.filter(r=>zeigeDauer||!r.dauer).forEach(r=>push(r.pid,{id:'dplan|'+r.pid,cat:'dauer',ico:'📌',
+  dpAlle.filter(r=>zeigeDauer||!r.dauer).forEach(r=>push(r.pid,{id:'dplan|'+r.pid,cat:'dauer',ico:'📌',dauer:!!r.dauer,
     txt:'Dauerplan anbieten',
     sub:r.gr.map(g=>g.k).join(' · ')+' · noch kein fester Takt',name:r.name}));
 
@@ -7921,6 +7957,10 @@ function tzGeschafft(erledigt,ent,istPensumTag){
   h+='</div>';
   // Die Zuordnung je Person (ent.jePerson) wird weiter gerechnet und ist
   // getestet, aber derzeit NICHT angezeigt — auf Wunsch erst einmal raus.
+  if(aufRegelNeu)h+='<div class="auf-zustand" style="margin-top:12px">'
+    +'Die Rechenregeln wurden heute geändert. Das Pensum dieses Tages wurde deshalb neu '
+    +'begonnen — was vorher schon gezählt war, steht nicht mehr darin. Sonst sähe der '
+    +'Unterschied zwischen alter und neuer Regel aus wie geleistete Arbeit.</div>';
   // Der Standort-Hinweis. Solange Einträge ohne Standortangabe im Pensum
   // stehen, addieren sich die Reiter nicht — das muss dastehen, sonst hält man
   // die Zahlen für kaputt.

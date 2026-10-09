@@ -274,6 +274,11 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--bg)
    zugeklappten Teamknopf verschwindet. */
 .auf-zustand{font-size:11.5px;color:var(--muted);margin:-8px 0 14px}
 .auf-zustand-fehler{color:var(--fire);font-weight:550}
+/* Die Aufgabenleiste in der Rezepttabelle. Sie darf die Tabelle nicht
+   auseinanderziehen: feste Mindestbreite, Umbruch erlaubt, Notiz darunter. */
+.rz-meta{min-width:230px}
+.rz-meta .task-meta{justify-content:flex-start;flex-wrap:wrap;gap:5px}
+.rz-meta .nz-txt{margin-top:5px;max-width:260px}
 /* Wem die automatisch erledigten zugeordnet werden. Still gehalten: Es ist
    eine Zuordnung über die Zuständigkeit, keine gemessene Leistung. */
 .tz-gperson{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px;
@@ -3624,6 +3629,13 @@ function buildOffeneTV(voRoh,standort,heuteDs,dd,hist){
   return out;
 }
 
+// Die Aufgaben-Id einer Verordnung. Steht an EINER Stelle, weil das Tagesziel
+// und der Reiter „Offene Rezepte" dieselbe Aufgabe meinen: Wer im Reiter eine
+// Notiz schreibt oder abhakt, tut das für dieselbe Zeile, die morgens in der
+// Tagesliste steht. Zwei Schreibweisen hätten zwei getrennte Protokolle ergeben
+// und niemand hätte gemerkt, dass die Notiz nicht ankommt.
+function aufIdRezept(r){return'abr|'+((r&&r.id)!=null?r.id:'');}
+
 const OFFEN_KAT={
   fertig   :{l:'Fertig, nicht abgerechnet',b:'b-red',  t:'Alle verordneten Einheiten liegen als Termin in der Vergangenheit, kein Termin mehr offen — und das Rezept ist noch nicht an die Abrechnung gegeben. Versandte Rezepte stehen hier NICHT: dort ist in der Praxis nichts mehr zu tun.'},
   steck    :{l:'Steckengeblieben',         b:'b-amber',t:'Ein Teil der Einheiten ist terminlich durch, der Rest ist nicht terminiert — die Restmenge verfällt'},
@@ -4711,6 +4723,11 @@ function renderOffeneTV(el){
     +`<th class="r" data-sort="gel" onclick="sortOffen('gel')">Einheiten <span class="arrow"></span></th>`
     +`<th class="r" data-sort="rest" onclick="sortOffen('rest')">Rest <span class="arrow"></span></th>`
     +`<th class="r" data-sort="zz" onclick="sortOffen('zz')">Zuzahlung <span class="arrow"></span></th>`
+    // Dieselbe Leiste wie im Tagesziel. Eine Verordnung ist EINE Sache, egal in
+    // welchem Reiter sie gerade steht — Status, Zuständige, Frist und Notiz
+    // gehören deshalb an beide Stellen und teilen sich dieselbe Aufgaben-Id
+    // („abr|" + Verordnungsnummer). Wer hier abhakt, hakt im Tagesziel mit ab.
+    +`<th>Status &amp; Notiz</th>`
     +`</tr></thead><tbody id="tbody"></tbody></table></div>`;
   const mitHist=offenTV.some(r=>r.quelle==='termin');
   h+=`<div style="font-size:10px;color:var(--muted);margin-top:10px;line-height:1.6">`
@@ -4792,7 +4809,8 @@ function renderOffenTable(){
       +`<td class="r"><span class="days">${r.daysAgo!=null?r.daysAgo:'–'}</span></td>`
       +`<td class="r"><strong${voll?' style="color:var(--red)"':''}>${r.gel}</strong><span style="color:var(--muted);font-size:10px"> / ${r.kann}</span>${luecke}</td>`
       +`<td class="r">${r.rest>0?'<strong style="color:var(--amber)">'+r.rest+'</strong>':'<span style="color:var(--muted)">–</span>'}</td>`
-      +`<td class="r">${r.zz>0?'<strong>'+fm(r.zz)+'</strong>':'<span style="color:var(--muted)">–</span>'}</td>`;
+      +`<td class="r">${r.zz>0?'<strong>'+fm(r.zz)+'</strong>':'<span style="color:var(--muted)">–</span>'}</td>`
+      +`<td class="rz-meta">${taskMeta(aufIdRezept(r),'abr',r.patient)}${notizZeile(aufIdRezept(r))}</td>`;
     tb.appendChild(tr);
   });
 }
@@ -6135,6 +6153,11 @@ function rerenderTasks(){
   else if(curView==='verplanung')renderVerplanung();
   else if(curView==='team')renderTeamReport();
   else if(curView==='luecken')renderDayView();
+  // „Offene Rezepte" trägt seit der Vereinheitlichung dieselbe Aufgabenleiste.
+  // Ohne diese Zeile bliebe ein dort gesetzter Status stehen, bis jemand den
+  // Reiter wechselt — er wäre gespeichert, aber unsichtbar, und das sieht aus
+  // wie ein Klick, der nicht angekommen ist.
+  else if(curView==='offene')renderOffeneRezepte();
 }
 
 // ── Team & Zuweisung ───────────────────────────────────────────────────────
@@ -7238,7 +7261,7 @@ function buildTasks(locId,subKey,ds){
   //    liegengeblieben ist. Der Reiter "Offene Rezepte" zeigt weiter alles.
   (offenTV||[]).filter(o=>loc&&o.standort===loc.label&&(o.kat==='fertig'||o.kat==='rgOffen')
       &&o.daysAgo!=null&&o.daysAgo>=ABR_REIFE)
-    .forEach(o=>push(o.pid,{id:'abr|'+o.id,cat:'abr',ico:'💰',
+    .forEach(o=>push(o.pid,{id:aufIdRezept(o),cat:'abr',ico:'💰',
       txt:o.kat==='rgOffen'?'Rechnung nachfassen':'Rezept abrechnen',
       sub:(o.heilmittel||o.formular||'')+' · '+o.gel+'/'+o.kann
          +(o.daysAgo!=null?' · seit '+o.daysAgo+' Tagen':''),

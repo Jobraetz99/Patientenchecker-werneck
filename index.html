@@ -4704,6 +4704,7 @@ function renderOffeneTV(el){
     +`<th data-sort="patient" onclick="sortOffen('patient')">Patient <span class="arrow"></span></th>`
     +`<th data-sort="kat" onclick="sortOffen('kat')">Grund <span class="arrow"></span></th>`
     +`<th>Heilmittel</th>`
+    +`<th class="r" data-sort="ausst" onclick="sortOffen('ausst')">Rezept vom <span class="arrow"></span></th>`
     +`<th data-sort="standort" onclick="sortOffen('standort')">Standort <span class="arrow"></span></th>`
     +`<th class="r" data-sort="letzter" onclick="sortOffen('letzter')">Letzter Termin <span class="arrow"></span></th>`
     +`<th class="r" data-sort="daysAgo" onclick="sortOffen('daysAgo')">Tage her <span class="arrow"></span></th>`
@@ -4785,6 +4786,7 @@ function renderOffenTable(){
     tr.innerHTML=`<td><div class="pn">${esc(r.patient)}</div></td>`
       +`<td><span class="badge ${K.b}" title="${esc(K.t)}">${K.l}</span>${zusatz}</td>`
       +`<td style="font-size:11px">${esc(String(r.heilmittel).slice(0,40))}${r.formular&&r.formular!=='GKV'?' <span style="color:var(--muted);font-size:9px;font-weight:700">'+esc(r.formular)+'</span>':''}</td>`
+      +`<td class="r" style="white-space:nowrap">${r.ausst?esc(r.ausst.split('-').reverse().join('.')):'<span style="color:var(--muted)">–</span>'}</td>`
       +`<td><span class="standort ${sC(r.standort)}">${esc(r.standort)}</span></td>`
       +`<td class="r">${marke}${fd}</td>`
       +`<td class="r"><span class="days">${r.daysAgo!=null?r.daysAgo:'–'}</span></td>`

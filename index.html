@@ -987,6 +987,46 @@ const LOCS=[
 // Mitarbeiter-IDs, die dauerhaft nie angezeigt werden sollen (Handbetrieb, Notnagel).
 // Leer lassen = automatische Team-Erkennung (TEAM_IDS) entscheidet. IDs = personId aus thevea.
 const INAKTIVE_MA=new Set([]);
+// „KEIN THERAPEUT" — Eintraege, die in thevea wie ein Mitarbeiter aussehen, aber
+// keiner sind: Sammel- und Platzhalterkalender, an denen Termine haengen, ohne
+// dass jemand behandelt. In thevea tragen sie das Kuerzel KT.
+//
+// Erkannt wird am NAMEN, nicht am Kuerzel. Das ist keine Nachlaessigkeit,
+// sondern das Einzige, was hier ankommt: MandantMitarbeiter kennt im Schema nur
+// person / sichtbar / farbe / rolle — ein Kuerzelfeld gibt es nicht —, und am
+// Termin stehen ausschliesslich Id, Vorname und Nachname. Soll spaeter wirklich
+// das Kuerzel entscheiden, muss zuerst der Flow es mitholen und ablegen.
+//
+// Der Ausschluss greift VOR der Team-Erkennung. Sonst reisst ein Platzhalter mit
+// vielen Terminen MIN_TERMINE_14TAGE muehelos, gilt als Teammitglied und zieht
+// mit seiner leeren Arbeitszeit die Auslastung der ganzen Praxis nach unten.
+// Als Trenner gilt auch der Bindestrich, nicht nur das Leerzeichen: In thevea
+// steht das Kuerzel als Namenszusatz („Sarah Wiebusch - KT"), und ob jemand
+// dabei ein Leerzeichen setzt, ist Zufall. „Wiebusch -KT" rutschte sonst durch
+// und die Person zaehlte als Therapeutin.
+//
+// Geprueft an allen 35 Namen, die in den Terminplaenen und der Historie
+// vorkommen: Die weitere Fassung trifft genau denselben einen Platzhalter.
+// Namen wie „Katrin Trommler", „Kati Theiss" oder „Viktor Ott" bleiben
+// unberuehrt — „kt" muss als eigenes Wort dastehen.
+const KEIN_THERAPEUT=/(^|[\s\-\u2013\u2014])kt([\s\-\u2013\u2014]|$)|kein\s*therapeut/i;
+const _ktGesehen=new Set();
+// Sauberer Anzeigename aus einem Mitarbeiter-Objekt der Tagesplan-JSONs.
+// Die Klammerzusaetze ("Nuesslein (Physio - #2)") fallen weg.
+function maName(m){
+  if(!m)return'';
+  return((m.Vorname||'')+' '+(m.Nachname||'')).replace(/\s*\(.*?\)\s*/g,' ').replace(/\s+/g,' ').trim();
+}
+// Jeder ausgeschlossene Name wird einmal in der Konsole genannt. Ein stiller
+// Filter, der versehentlich einen echten Kollegen trifft, faellt sonst nie auf —
+// seine Stunden fehlten dann einfach in der Auslastung.
+function istKeinTherapeut(m){
+  const nm=maName(m);
+  if(!nm||!KEIN_THERAPEUT.test(nm))return false;
+  if(!_ktGesehen.has(nm)){_ktGesehen.add(nm);
+    console.log('Kein Therapeut — ausgeschlossen:',nm,'(id',(m&&m.Id)!=null?m.Id:'?',')');}
+  return true;
+}
 // TEAM-ERKENNUNG (statt fester Mitarbeiterliste)
 // Im thevea-Mandanten liegen neben dem Werneck-Team auch Therapeuten einer ANDEREN Praxis,
 // die die Software nur für Videotherapie nutzt. Ein Kennzeichen dafür gibt es im Schema nicht:
@@ -1324,7 +1364,7 @@ async function loadAll(){
         (dd.extraDays||[]).forEach(a=>{if(Array.isArray(a))b.push(a.flat());});
         b.forEach(arr=>arr.forEach(t=>{
           if(!t||!(t.PatientId||t.Art===1||t.Art===4))return;
-          (t.Mitarbeiter||[]).forEach(m=>{if(m&&m.Id!=null)cnt[m.Id]=(cnt[m.Id]||0)+1;});
+          (t.Mitarbeiter||[]).forEach(m=>{if(m&&m.Id!=null&&!istKeinTherapeut(m))cnt[m.Id]=(cnt[m.Id]||0)+1;});
         }));
       }
       Object.entries(cnt).forEach(([id,n])=>{if(n>=MIN_TERMINE_14TAGE)TEAM_IDS.add(String(id));});
@@ -1520,7 +1560,7 @@ function getFeedbackPatients(targetKW,targetYear){
       // Rezept gilt als abgeschlossen: alle erbracht, keine offenen
       if(done>0&&open===0){
         // Letzter erbrachter Termin = Abschlussdatum
-        const doneTe=te.filter(t=>t.Status===4&&t.Datum).map(t=>({d:new Date(t.Datum),n:t.MitarbeiterName||''}));
+        const doneTe=te.filter(t=>t.Status===4&&t.Datum).map(t=>({d:new Date(t.Datum),n:KEIN_THERAPEUT.test(t.MitarbeiterName||'')?'':(t.MitarbeiterName||'')}));
         if(!doneTe.length)return;
         doneTe.sort((a,b)=>b.d-a.d);
         const last=doneTe[0];
@@ -1651,7 +1691,7 @@ function setFeedbackStandort(s,el){
 // Tagesschlüssel YYYY-MM-DD aus einem Date — robust gegen ISO- oder DE-Format
 function reDayKey(d){if(!d||isNaN(d.getTime()))return'';const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const dd=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+dd;}
 // Sauberer Therapeutenname aus einem Mitarbeiter-Objekt der Tagesplan-JSONs
-function reThName(maArr){if(!maArr||!maArr.length)return'—';const m=maArr[0];return((m.Vorname||'')+' '+(m.Nachname||'')).replace(/\s*\(.*?\)\s*/g,' ').replace(/\s+/g,' ').trim()||'—';}
+function reThName(maArr){if(!maArr||!maArr.length)return'—';const m=(maArr||[]).filter(x=>!istKeinTherapeut(x))[0];return maName(m)||'—';}
 
 // Sammelt für einen Standort + Tag alle Patienten, deren Termin an dem Tag der
 // letzte oder vorletzte Behandlungstag eines Rezepts ist.
@@ -1900,7 +1940,7 @@ function gatherInternTP(suf){
     const key=(t.Beginn||'')+'|'+(t.Bezeichnung||'')+'|'+((t.Mitarbeiter||[]).map(m=>m.Id).join(','));
     if(seen.has(key))return;seen.add(key);
     const beg=new Date(t.Beginn),end=new Date(t.Ende);if(isNaN(beg))return;
-    out.push({typ,bez:t.Bezeichnung||'',beg,end,ma:(t.Mitarbeiter||[]).map(m=>((m.Vorname||'')+' '+(m.Nachname||'').replace(/\s*\(.*?\)\s*/g,'')).trim()).filter(Boolean).join(', ')});
+    out.push({typ,bez:t.Bezeichnung||'',beg,end,ma:(t.Mitarbeiter||[]).filter(m=>!istKeinTherapeut(m)).map(m=>((m.Vorname||'')+' '+(m.Nachname||'').replace(/\s*\(.*?\)\s*/g,'')).trim()).filter(Boolean).join(', ')});
   });
   return out;
 }
@@ -2850,7 +2890,7 @@ function analyzeDay(tp,az){
   }
   const azById={};if(azValid)azValid.forEach(a=>{azById[a.Id]={az:a.Arbeitszeiten||[],absent:a.IstAbwesend,label:a.Abwesenheitsbezeichnung};});
   const IGNORE=['Christine Franz'];
-  const T={};tp.forEach(t=>{(t.Mitarbeiter||[]).forEach(m=>{const id=m.Id,vn=(m.Vorname||'').trim(),nn=(m.Nachname||'').trim();if(!vn)return;if(INAKTIVE_MA.has(String(id)))return;if(TEAM_IDS.size&&!TEAM_IDS.has(String(id)))return;if(IGNORE.some(n=>n.toLowerCase()===(vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim()).toLowerCase()))return;if(!T[id])T[id]={vn,nn,dn:vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim(),ar:[],pz:[],pc:0};T[id].ar.push([new Date(t.Beginn),new Date(t.Ende)]);
+  const T={};tp.forEach(t=>{(t.Mitarbeiter||[]).forEach(m=>{const id=m.Id,vn=(m.Vorname||'').trim(),nn=(m.Nachname||'').trim();if(istKeinTherapeut(m))return;if(!vn)return;if(INAKTIVE_MA.has(String(id)))return;if(TEAM_IDS.size&&!TEAM_IDS.has(String(id)))return;if(IGNORE.some(n=>n.toLowerCase()===(vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim()).toLowerCase()))return;if(!T[id])T[id]={vn,nn,dn:vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim(),ar:[],pz:[],pc:0};T[id].ar.push([new Date(t.Beginn),new Date(t.Ende)]);
     // Patientenzeit getrennt mitführen: Nur sie darf die Schicht verlängern.
     const ta=terminArt(t);
     if(ta==='pat'||ta==='kurs'||ta==='aus')T[id].pz.push([new Date(t.Beginn),new Date(t.Ende)]);
@@ -3451,9 +3491,12 @@ function histMap(roh,heuteDs){
     // Quelle. Physio liefert den Mitarbeiter zu 100 %, die Ergo-Historie
     // führt ihn gar nicht; das Feld bleibt dort leer und wird nicht geraten.
     const mp=(t.mitarbeiter&&t.mitarbeiter.person)||null;
-    const mName=mp?((mp.vorname||'')+' '+(mp.nachname||'')).trim()
+    const mNameRoh=mp?((mp.vorname||'')+' '+(mp.nachname||'')).trim()
       :(Array.isArray(t.Mitarbeiter)&&t.Mitarbeiter[0]
         ?((t.Mitarbeiter[0].Vorname||'')+' '+(t.Mitarbeiter[0].Nachname||'')).trim():'');
+    // Der Platzhalter ist kein Behandler. Leer ist hier richtig: „unbekannt" ist
+    // ehrlicher als ein Name, hinter dem niemand steht.
+    const mName=KEIN_THERAPEUT.test(mNameRoh)?'':mNameRoh;
     const stunde=(()=>{const x=new Date(dRaw);return isNaN(x.getTime())?null:x.getHours();})();
     const eintragen=(m,k)=>{
       if(k==null)return;
@@ -3814,7 +3857,7 @@ function buildRezepteTV(voRoh,dd,refDs,detRoh,hist){
     // Lückenfüller, wenn sein Rezept dazu schweigt.
     if(t.IsHausbesuch===true)pi[id].hbT++;else pi[id].praxisT++;
     if(!t.VerordnungId)pi[id].ohneVo++;
-    (t.Mitarbeiter||[]).forEach(m=>{if(m&&(m.Vorname||m.Nachname))
+    (t.Mitarbeiter||[]).forEach(m=>{if(m&&(m.Vorname||m.Nachname)&&!istKeinTherapeut(m))
       pi[id].th.add(((m.Vorname||'')+' '+(m.Nachname||'')).trim());});
   }));
   Object.values(pi).forEach(p=>p.termine.sort((a,b)=>String(a.beginn)<String(b.beginn)?-1:1));
@@ -4165,6 +4208,7 @@ function analyzeRezepte(tp,beh,pl,bereich,ergoDet,refDate){
       const sixMonthsAgo=new Date(today);sixMonthsAgo.setMonth(sixMonthsAgo.getMonth()-6);
       act.forEach(v=>{(v.Termine||[]).forEach(t=>{
         if(!t.MitarbeiterName||!t.Datum)return;
+        if(KEIN_THERAPEUT.test(t.MitarbeiterName))return;
         const d=new Date(t.Datum);
         // Vergangene Termine: nur wenn innerhalb der letzten 6 Monate
         // Zukünftige Termine: immer zählen (egal wie weit in der Zukunft)
@@ -4173,7 +4217,7 @@ function analyzeRezepte(tp,beh,pl,bereich,ergoDet,refDate){
         }
       });});
       // Zusätzlich: Termine aus den TP-JSONs (heute/morgen) — Fallback, falls nicht in behData
-      (inf.termine||[]).forEach(t=>{if(t.ma)(t.ma).forEach(m=>{if(m.Vorname||m.Nachname)thHist.add(((m.Vorname||'')+' '+(m.Nachname||'')).trim());});});
+      (inf.termine||[]).forEach(t=>{if(t.ma)(t.ma).forEach(m=>{if((m.Vorname||m.Nachname)&&!istKeinTherapeut(m))thHist.add(((m.Vorname||'')+' '+(m.Nachname||'')).trim());});});
       const allDates=[];act.forEach(v=>{(v.Termine||[]).forEach(t=>{if(t.Datum&&t.Status===4)allDates.push(t.Datum);});});
       const tPat=analyzeTimePattern(allDates);
       cat.nr.push({pid,name:inf.name,icd:act[0]?.ErsterIcd10||'—',detail:re.join(' · '),hint:pFr?`~${pFr.pw}x/Wo`:'Mehr möglich',termin:inf.nextTermin,gep:pG,erb:pE,tot:pT,score:sc,reasons:re,badge:sc+'',badgeC:'c-fire',tags:{bvb:!!pB,blanko:pBl||pBP,blankopot:(pBlOpenRest>0||!!pBlBvb),postop:pPO,multi:!!mH},_hmDauer:hmD,_thHistory:[...thHist],_timePat:tPat,_freqPerWeek:pFr?pFr.pw:0,_kgg:isKGGpat,_blankoOffen:pBlOpenRest,_blankoTage:pBlTage,_blankoBvb:pBlBvb});
@@ -8000,7 +8044,7 @@ function tzPatientenAmTag(tag){
     const p=patAppt[k]||(patAppt[k]={key:k,
       name:((t.PatientNachname||'')+(t.PatientVorname?', '+t.PatientVorname:'')).trim()||'(ohne Namen)',
       start,
-      therapist:(t.Mitarbeiter&&t.Mitarbeiter[0])?(((t.Mitarbeiter[0].Vorname||'')+' '+(t.Mitarbeiter[0].Nachname||'')).replace(/\s*\(.*?\)\s*/g,' ').replace(/\s+/g,' ').trim()):'',
+      therapist:maName((t.Mitarbeiter||[]).filter(m=>!istKeinTherapeut(m))[0]),
       leist:new Set()});
     if(start<p.start)p.start=start;
     if(t.Bezeichnung)p.leist.add(t.Bezeichnung);
@@ -8151,7 +8195,7 @@ function buildTagesplan(tage,idx,T){
     const p=patAppt[k]||(patAppt[k]={key:k,
       name:((t.PatientNachname||'')+(t.PatientVorname?', '+t.PatientVorname:'')).trim()||'(ohne Namen)',
       start,
-      therapist:(t.Mitarbeiter&&t.Mitarbeiter[0])?(((t.Mitarbeiter[0].Vorname||'')+' '+(t.Mitarbeiter[0].Nachname||'')).replace(/\s*\(.*?\)\s*/g,' ').replace(/\s+/g,' ').trim()):'',
+      therapist:maName((t.Mitarbeiter||[]).filter(m=>!istKeinTherapeut(m))[0]),
       leist:new Set()});
     if(start<p.start)p.start=start;
     if(t.Bezeichnung)p.leist.add(t.Bezeichnung);

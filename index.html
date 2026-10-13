@@ -915,7 +915,7 @@ body{
 <div id="lo"><div class="lb"><h1>Praxismanagement</h1><p>KIMOJO Werneck · To-Do's & Controlling</p><button class="l-btn" onclick="signIn()"><svg viewBox="0 0 21 21" width="20" height="20"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>Mit Microsoft anmelden</button><div class="l-err" id="er"></div></div></div>
 <div class="loading h" id="ld"><div class="spinner"></div><p id="lt">Lade...</p></div>
 <div id="db"><div class="mx">
-<div class="hdr"><h1>☀️ <span>Praxis</span><span class="acc">management</span> Werneck</h1><div class="hdr-r"><span class="demo-badge">🏥 KIMOJO WERNECK</span><span id="lastUp" style="font-size:11px;color:var(--muted)"></span><button class="hdr-btn" onclick="loadAll()">↻ Neu laden</button><button class="hdr-btn" onclick="signOut()">Abmelden</button></div></div>
+<div class="hdr"><h1>☀️ <span>Praxis</span><span class="acc">management</span> Werneck</h1><div class="hdr-r"><span class="demo-badge">🏥 KIMOJO WERNECK</span><span id="bld" style="font-size:10px;color:var(--muted)" title="Fassung dieser Seite"></span><span id="lastUp" style="font-size:11px;color:var(--muted)"></span><button class="hdr-btn" onclick="loadAll()">↻ Neu laden</button><button class="hdr-btn" onclick="signOut()">Abmelden</button></div></div>
 <div class="main-tabs" id="mainTabs"></div>
 <div id="mc"></div>
 </div></div>
@@ -1272,6 +1272,63 @@ function getMorgenLabel(){
 // ═══════════════════════════════════════════════════════════
 // LOAD ALL DATA
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// WELCHE FASSUNG LÄUFT HIER?
+// ═══════════════════════════════════════════════════════════════════════════
+// Die Seite ist eine einzige Datei. GitHub gibt sie mit zehn Minuten Haltbarkeit
+// heraus, und ein offener Reiter fragt von sich aus NIE wieder nach. Eine
+// Korrektur, die oben längst liegt, kommt deshalb nicht an, solange niemand neu
+// lädt — und von innen ist das nicht zu erkennen: die Seite sieht aus wie immer
+// und zeigt trotzdem die alte Regel. Genau das hat beim „Kein Therapeut"-Filter
+// Stunden gekostet. Also merkt sich die Seite beim Start die Kennung ihrer
+// eigenen Datei und vergleicht sie danach mit der Kennung oben.
+let BUILD_ID=null,BUILD_ZEIT=null;
+function buildKennung(){
+  if(!/^https?:/.test(location.protocol))return Promise.resolve(null);
+  return fetch(location.href,{method:'HEAD',cache:'no-store'})
+    .then(r=>({id:r.headers.get('etag')||r.headers.get('last-modified')||null,
+               zeit:r.headers.get('last-modified')||null}))
+    .catch(()=>null);
+}
+function buildStempel(){
+  const el=document.getElementById('bld');if(!el)return;
+  if(!BUILD_ZEIT){el.textContent='';return;}
+  const d=new Date(BUILD_ZEIT);if(isNaN(d)){el.textContent='';return;}
+  el.textContent='Fassung '+d.toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit'})
+    +' '+d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+}
+let buildTakt=null;
+function buildStart(){
+  buildKennung().then(r=>{if(!r)return;BUILD_ID=r.id;BUILD_ZEIT=r.zeit;buildStempel();});
+  // Ein eigener Takt, einmal angelegt. Er haengt nicht am Kennzahlentakt: der
+  // schreibt Daten, dieser schaut nur nach, ob die Seite selbst noch aktuell ist.
+  if(!buildTakt)try{buildTakt=setInterval(buildPruefen,5*60*1000);}catch(e){}
+}
+// Geprüft wird bei jedem „↻ Neu laden" und zusätzlich alle fünf Minuten. Beim
+// ersten Lauf steht noch keine Kennung fest — dann wird nur nachgeholt, nicht
+// gewarnt, sonst meldete die Seite sich selbst als veraltet.
+function buildPruefen(){
+  buildKennung().then(r=>{
+    if(!r||!r.id)return;
+    if(!BUILD_ID){BUILD_ID=r.id;BUILD_ZEIT=r.zeit;buildStempel();return;}
+    if(r.id!==BUILD_ID)buildHinweis();
+  });
+}
+function buildHinweis(){
+  if(document.getElementById('buildNeu'))return;
+  const d=document.createElement('div');d.id='buildNeu';
+  d.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:9999;'
+    +'background:var(--red);color:#fff;padding:11px 15px;border-radius:10px;font-size:13px;'
+    +'box-shadow:0 4px 18px rgba(0,0,0,.28);display:flex;gap:12px;align-items:center;max-width:92vw';
+  d.appendChild(Object.assign(document.createElement('span'),
+    {textContent:'Oben liegt eine neuere Fassung. Dieser Reiter rechnet noch nach den alten Regeln.'}));
+  const b=document.createElement('button');b.textContent='Neu laden';
+  b.style.cssText='background:#fff;color:var(--red);border:0;border-radius:6px;padding:6px 11px;'
+    +'font-weight:600;cursor:pointer;white-space:nowrap';
+  b.onclick=()=>{location.reload();};
+  d.appendChild(b);document.body.appendChild(d);
+}
+
 async function loadAll(){
   const ld=document.getElementById('ld'),lt=document.getElementById('lt');
   ld.classList.remove('h');document.getElementById('lo').style.display='none';
@@ -1468,6 +1525,7 @@ async function loadAll(){
 
     document.getElementById('db').style.display='block';
     document.getElementById('lastUp').textContent='⏱ '+new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+    if(BUILD_ID)buildPruefen();else buildStart();
     // Die Kennzahlendatei wird NACH dem Aufgabenprotokoll geschrieben — sonst
     // stünde jede Aufgabe als offen darin, deren Haken noch in einer
     // ungelesenen Monatsdatei liegt. aufStart() fängt seine Fehler selbst ab,

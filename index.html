@@ -1020,6 +1020,15 @@ function maName(m){
 // Jeder ausgeschlossene Name wird einmal in der Konsole genannt. Ein stiller
 // Filter, der versehentlich einen echten Kollegen trifft, faellt sonst nie auf —
 // seine Stunden fehlten dann einfach in der Auslastung.
+// Ein Termin, hinter dem NUR der Platzhalter steht. Nicht dasselbe wie ein
+// Termin ganz ohne Mitarbeiter: Der kann ein echter unbesetzter Platz sein und
+// bleibt stehen. Hier dagegen steht jemand dran, der niemand ist — die Zeile
+// gehoert in keine Liste, die von Therapeutenzeit handelt.
+function nurPlatzhalter(t){
+  const ma=(t&&t.Mitarbeiter)||[];
+  if(!ma.length)return false;
+  return ma.every(m=>istKeinTherapeut(m));
+}
 function istKeinTherapeut(m){
   const nm=maName(m);
   if(!nm||!KEIN_THERAPEUT.test(nm))return false;
@@ -1936,6 +1945,9 @@ function gatherInternTP(suf){
   const seen=new Set(),out=[];
   src.forEach(t=>{
     if(t.PatientId||t.Art===1||t.Art===4)return; // nur interne Termine
+    // Steht nur der Platzhalter dran, ist es niemandes Zeit. Die Zeile stand
+    // sonst mit leerem Therapeutenfeld in der Uebersicht.
+    if(nurPlatzhalter(t))return;
     const typ=classifyIntern(t.Bezeichnung);if(!typ)return;
     const key=(t.Beginn||'')+'|'+(t.Bezeichnung||'')+'|'+((t.Mitarbeiter||[]).map(m=>m.Id).join(','));
     if(seen.has(key))return;seen.add(key);

@@ -1460,6 +1460,9 @@ async function loadAll(){
       for(const loc of LOCS){
         let vo=await loadJSON('vo_uebersicht'+loc.suf+'.json');
         if(!vo&&loc.suf==='_wp')vo=await loadJSON('Verordnungsuebersicht.json');
+        // Hier, und nur hier, ist der Standort noch bekannt — also wird hier
+        // vermerkt, ob der Export alle Rezepte geliefert hat.
+        voNodes(vo,loc.id);
         // Verordnungsdetails: ICD-10, Diagnosegruppe, verordnete Frequenz und das
         // BVB/LVB-Kennzeichen. Die Übersicht kennt davon nichts — sie liefert nur
         // Mengen. Fehlt die Datei, läuft alles weiter, nur ohne Diagnose-Ebene.
@@ -1579,6 +1582,14 @@ function renderOffenePage(){
   h+='<div class="summary"><h2>💰 Offene Rezepte</h2>'
     +'<div class="tz-lead">Wo im Bestand Geld liegt: Rezepte, die fertig behandelt aber nicht abgerechnet sind, '
     +'Serien die steckengeblieben sind, und offene Zuzahlungen. Die Kacheln zeigen immer die aktuelle Filterauswahl.</div></div>';
+  // Der Export liefert die Uebersicht seitenweise und bricht bei 1000 Zeilen ab.
+  // Liegt die Praxis darueber, ist diese Seite unvollstaendig — das muss dort
+  // stehen, wo die Liste steht, nicht in einer Fussnote.
+  const fehlt=voFehltAnzahl();
+  if(fehlt>0)h+='<div class="auf-zustand auf-zustand-fehler" style="margin:-4px 0 14px">\u26a0\ufe0f Der Export hat '+fehlt+' Rezept'+(fehlt===1?'':'e')
+    +' nicht geliefert \u2014 thevea kennt mehr, als diese Seite sieht. Die Listen unten sind '
+    +'also zu kurz, nicht abgearbeitet. Ursache: Der Flow holt die Verordnungs\u00fcbersicht '
+    +'in Seiten von 1000 Zeilen und nimmt nur die erste. Das muss im Flow behoben werden.</div>';
   h+='<div id="offeneContainer"></div>';
   h+='<div class="ft">KIMOJO · Offene Rezepte</div>';
   document.getElementById('mc').innerHTML=h;
@@ -3797,12 +3808,26 @@ function voKann(v){return Math.max(0,(((v&&v.summeDurchfuehrbareBehandlungen)||0
 // Erbrachte Menge nach thevea, auf derselben Grundlage gezählt.
 function voErb(v){return Math.max(0,(((v&&v.summeDurchgefuehrteBehandlungen)||0)-voDiag(v)));}
 
-function voNodes(roh){
+// Die Verordnungsuebersicht nennt neben den Zeilen auch, wie viele es in thevea
+// insgesamt gibt. Der Export holt sie seitenweise und bricht bei 1000 ab —
+// seit die Praxis darueber liegt, fehlen Rezepte, ohne dass man es sieht. Eine
+// Liste, die stillschweigend kuerzer ist als die Wirklichkeit, ist schlimmer als
+// gar keine: "Offene Rezepte" waere dann vollstaendig abgearbeitet und es lagen
+// trotzdem Rezepte herum. Also wird die Luecke gemerkt und angezeigt.
+let voFehlt={};
+function voNodes(roh,loc){
   if(!roh)return null;
   if(Array.isArray(roh))return roh;
-  const n=(roh.data&&roh.data.verordnungUebersicht&&roh.data.verordnungUebersicht.nodes)
-        ||(roh.verordnungUebersicht&&roh.verordnungUebersicht.nodes)||roh.nodes;
-  return Array.isArray(n)?n:null;
+  const u=(roh.data&&roh.data.verordnungUebersicht)||roh.verordnungUebersicht||null;
+  const n=(u&&u.nodes)||roh.nodes;
+  if(!Array.isArray(n))return null;
+  const ges=u&&u.pageInfo&&u.pageInfo.nodesCount;
+  if(loc&&typeof ges==='number')voFehlt[loc]=Math.max(0,ges-n.length);
+  return n;
+}
+// Wie viele Rezepte der Export unterschlaegt — ueber alle geladenen Standorte.
+function voFehltAnzahl(){
+  return Object.keys(voFehlt).reduce((a,k)=>a+(voFehlt[k]||0),0);
 }
 function plusTag(ds,n){const d=new Date(ds+'T12:00:00');d.setDate(d.getDate()+n);
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}

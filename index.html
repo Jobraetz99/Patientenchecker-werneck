@@ -1194,7 +1194,12 @@ const LADE_VERSUCHE=3;
 function ladeFehlerListe(){return Object.keys(ladeFehler);}
 const schlaf=ms=>new Promise(r=>setTimeout(r,ms));
 
-async function ladeRoh(pfad,etikett){
+// `still` heisst: diese Datei wird auf Verdacht geholt. Es gibt sie vielleicht
+// gar nicht — ein Altbestand aus der Medifox-Zeit, ein Monatsprotokoll, das
+// noch niemand geschrieben hat, oder ein Dateiname, der auf einen anderen
+// zurueckfaellt. Ihr Fehlen ist kein Fehler und gehoert nicht ins Band:
+// eine Warnung, die immer leuchtet, liest nach drei Tagen niemand mehr.
+async function ladeRoh(pfad,etikett,still){
   const e=pfad.split('/').filter(s=>s).map(s=>encodeURIComponent(s)).join('/');
   const url='https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+e+':/content';
   let frisch=false, grund='';
@@ -1236,11 +1241,13 @@ async function ladeRoh(pfad,etikett){
       continue;
     }
   }
+  if(still){console.log('nicht da (ohne Folgen):',etikett,'—',grund);return null;}
   ladeFehler[etikett]=grund;
   console.error('Laden fehlgeschlagen:',etikett,'—',grund);
   return null;
 }
-async function loadJSON(p){return ladeRoh(BASE+p,p);}
+// Pflichtdatei, solange nichts anderes dabeisteht.
+async function loadJSON(p,still){return ladeRoh(BASE+p,p,still);}
 
 // Was nicht geladen werden konnte, steht oben — in jedem Reiter, nicht nur in
 // dem, der es zufaellig braucht. Eine Zahl, deren Grundlage fehlt, ist keine
@@ -1256,7 +1263,9 @@ function ladeBannerZeigen(){
 }
 // Wie loadJSON, nur ohne BASE davor. Für Dateien, die sich beide Dashboards
 // teilen und deshalb nicht im Standort-Ordner liegen dürfen (z. B. Telefonie).
-async function loadJSONAbs(f){return ladeRoh(f,f.split('/').pop());}
+// Protokolle, Tages- und Monatsdateien. Dass eine davon noch nicht existiert,
+// ist der Normalfall und keine Stoerung — deshalb immer still.
+async function loadJSONAbs(f){return ladeRoh(f,f.split('/').pop(),true);}
 async function gqlPatch(url,body){return fetch(url,{method:'PATCH',headers:{Authorization:'Bearer '+window._token,'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.ok?r.json():null);}
 // ---- Nachrücker-Notizen (geteilt über SharePoint) ----
 // Schreibt ein JS-Objekt als JSON-Datei zurück nach SharePoint (PUT .../content).
@@ -1288,11 +1297,11 @@ async function saveJSONAbs(f,obj){
 const NR_NOTES_FILE='nachruecker_notizen.json';
 let nrNotes={}; // pid -> {notiz, angerufen, von, zeit}
 function meName(){const a=ma.getActiveAccount();return a?(a.name||a.username||'Unbekannt'):'Unbekannt';}
-async function loadNrNotes(){try{nrNotes=(await loadJSON(NR_NOTES_FILE))||{};}catch(e){nrNotes={};}}
+async function loadNrNotes(){try{nrNotes=(await loadJSON(NR_NOTES_FILE,true))||{};}catch(e){nrNotes={};}}
 // Speichert eine Notiz-Änderung: lädt erst die aktuelle Datei neu, merged, schreibt zurück
 // (so überschreibt man keine parallel gemachte Notiz eines Kollegen).
 async function saveNrNote(pid,patch){
-  let latest;try{latest=(await loadJSON(NR_NOTES_FILE))||{};}catch(e){latest={};}
+  let latest;try{latest=(await loadJSON(NR_NOTES_FILE,true))||{};}catch(e){latest={};}
   const cur=latest[pid]||{};
   const merged={...cur,...patch,von:meName(),zeit:Date.now()};
   if(!String(merged.notiz||'').trim()&&!merged.angerufen)delete latest[pid];else latest[pid]=merged;
@@ -1451,14 +1460,14 @@ async function loadAll(){
         DATA[suf].heute.az=buildAZ(azRoh,abwRoh,isoDay(0));
         DATA[suf].morgen.az=buildAZ(azRoh,abwRoh,isoDay(1));
       }else{
-        DATA[suf].heute.az=await loadJSON('arbeitszeiten_heute'+suf+'.json');
-        DATA[suf].morgen.az=await loadJSON('arbeitszeiten_morgen'+suf+'.json');
+        DATA[suf].heute.az=await loadJSON('arbeitszeiten_heute'+suf+'.json',true);
+        DATA[suf].morgen.az=await loadJSON('arbeitszeiten_morgen'+suf+'.json',true);
       }
-      try{DATA[suf].woche.tp=await loadJSON('terminplan_woche'+suf+'.json');}catch(e){DATA[suf].woche.tp=null;} // optional: Wochenübersicht (1 Datei)
+      try{DATA[suf].woche.tp=await loadJSON('terminplan_woche'+suf+'.json',true);}catch(e){DATA[suf].woche.tp=null;} // optional: Wochenübersicht (1 Datei)
       // Tagesdateien Tag +2..+13. thevea liefert 14 Tage in einem Rutsch (ein getTermine-Call,
       // ca. 0,8 MB / 2 s), der Flow zerlegt das Ergebnis in Tagesdateien. Dadurch ist die
       // Wochenübersicht zwei Wochen weit sichtbar und "Termine ohne Rezept" greift früh genug.
-      try{const extra=await Promise.all(EXTRA_DAYS.map(n=>loadJSON('terminplan_t'+n+suf+'.json')));DATA[suf].extraDays=extra.filter(Boolean);}catch(e){DATA[suf].extraDays=[];}
+      try{const extra=await Promise.all(EXTRA_DAYS.map(n=>loadJSON('terminplan_t'+n+suf+'.json',true)));DATA[suf].extraDays=extra.filter(Boolean);}catch(e){DATA[suf].extraDays=[];}
       // "Morgen" ist freitags der Samstag und samstags der Sonntag — beides leere Dateien.
       // Der Reiter heißt dann laut getMorgenLabel() zwar schon "Montag", zeigte aber die
       // leere Samstagsdatei. Deshalb rückt er hier auf den ersten Tag mit Terminen vor.
@@ -1475,9 +1484,9 @@ async function loadAll(){
 
     lt.textContent='Lade Rezeptdaten...';
     // Werneck: beide thevea-Accounts schreiben in je eine Datei, der Flow führt sie zusammen.
-    plData=await loadJSON('patientenliste_werneck.json');
-    behData=await loadJSON('behandlungen_werneck.json');
-    ergoDetailData=await loadJSON('ergo_verordnungen_werneck.json');
+    plData=await loadJSON('patientenliste_werneck.json',true);
+    behData=await loadJSON('behandlungen_werneck.json',true);
+    ergoDetailData=await loadJSON('ergo_verordnungen_werneck.json',true);
     await loadNrNotes();
 
     // PAT_IDS — je Standort die Patienten der nächsten 14 Tage
@@ -1546,7 +1555,7 @@ async function loadAll(){
       // Rückfall auf die aktuelle Einzeldatei des Physio-Flows.
       lt.textContent='Berechne Nachrücker...';
       for(const loc of LOCS){
-        let vo=await loadJSON('vo_uebersicht'+loc.suf+'.json');
+        let vo=await loadJSON('vo_uebersicht'+loc.suf+'.json',loc.suf==='_wp');
         if(!vo&&loc.suf==='_wp')vo=await loadJSON('Verordnungsuebersicht.json');
         // Hier, und nur hier, ist der Standort noch bekannt — also wird hier
         // vermerkt, ob der Export alle Rezepte geliefert hat.
@@ -1598,7 +1607,7 @@ async function loadAll(){
     // Solange die Datei fehlt, bleibt der Historie-Block einfach leer.
     try{
       lt.textContent='Lade Auslastungs-Historie...';
-      histRaw=await loadJSON('auslastung_historie_werneck.json');
+      histRaw=await loadJSON('auslastung_historie_werneck.json',true);
       if(histRaw)histKWs=hProKW(histRaw,{},()=>'physio');
     }catch(e){console.warn('Historie:',e);}
 
@@ -6936,7 +6945,8 @@ function dauerSchalter(n){
   if(!n&&!zeigeDauer)return'';
   return'<button class="fsw'+(zeigeDauer?' a':'')+'" onclick="setZeigeDauer('+(zeigeDauer?'false':'true')+')"'
     +' title="'+escA((zeigeDauer?'Dauerpatienten ausblenden. ':'Dauerpatienten einblenden. ')+DAUER_QUELLE)+'">'
-    +'📌 Dauerpatienten'+(n?' <b>'+n+'</b>':'')+'</button>';
+    +(zeigeDauer?'📌 Dauerpatienten sichtbar'
+               :'📌 <b>'+n+'</b> Dauerpatient'+(n===1?'':'en')+' ausgeblendet')+'</button>';
 }
 
 // Hausbesuche. Eigener Schalter, nicht an den Dauerpatienten angehaengt: das ist
@@ -6953,7 +6963,8 @@ function hbSchalter(n){
   if(!n&&!zeigeHb)return'';
   return'<button class="fsw'+(zeigeHb?' a':'')+'" onclick="setZeigeHb('+(zeigeHb?'false':'true')+')"'
     +' title="'+escA((zeigeHb?'Hausbesuche ausblenden. ':'Hausbesuche einblenden. ')+HB_TITEL)+'">'
-    +'🚗 Hausbesuche'+(n?' <b>'+n+'</b>':'')+'</button>';
+    +(zeigeHb?'🚗 Hausbesuche sichtbar'
+             :'🚗 <b>'+n+'</b> Hausbesuch'+(n===1?'':'e')+' ausgeblendet')+'</button>';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -5784,10 +5784,17 @@ let aufPensum={},aufPensumTag='';
 //
 // ERHÖHEN, sobald sich ändert, was in buildTasks oder in den Quellen dahinter
 // (buildOffeneTV, buildVerplanung, buildFolgeVO …) als Aufgabe gilt.
-const AUF_REGEL=2;
+// 3 seit dem 16.10.2026: buildVerplanung liefert ohne Termin-Historie gar
+//   nichts mehr. Vorher entstanden daraus 311 statt 81 Patienten, und als die
+//   Historie wieder da war, fielen 181 davon aus der Liste — das Pensum
+//   verbuchte sie als geleistete Arbeit.
+const AUF_REGEL=3;
 // Wurde das Pensum heute wegen einer Regeländerung verworfen? Nur für den
 // Hinweis im Reiter — eine Zahl, die bei null anfängt, muss sagen warum.
 let aufRegelNeu=false;
+// Warum wurde verworfen: 'regel' (neue Rechenregeln), 'jetzt' (jetzt fehlt eine
+// Pflichtdatei), 'vorher' (der fruehere Lauf stand auf Luecken).
+let aufPensumGrund='';
 // Die vollständige Aufgabenliste des letzten Laufs — der Rohstoff für die
 // Tagesdatei. Steht hier, weil kennAufgaben sie ohnehin baut.
 let aufTagesListe=null;
@@ -6109,8 +6116,16 @@ function kennAufgaben(alt,tag){
   // Lücke, und die gehört zum Pensum dieses Tages.
   // Nur ein Pensum aus derselben Regelfassung darf fortgeschrieben werden.
   const regelAlt=(alt&&alt.regel)||0;
-  const passt=!alt||regelAlt===AUF_REGEL;
+  // Ein Pensum ist nur fortschreibbar, wenn BEIDE Laeufe auf vollstaendigen
+  // Daten standen. Fehlt eine Pflichtdatei, sind die Aufgaben von vorhin und
+  // die von jetzt nicht dieselbe Menge — die Differenz waere keine Arbeit,
+  // sondern der Unterschied zwischen zwei Datenstaenden. Genau das ist am
+  // 16.10.2026 passiert: 181 Aufgaben "erledigt", ohne dass jemand etwas tat.
+  const jetztVoll=ladeFehlerListe().length===0;
+  const passt=!alt||(regelAlt===AUF_REGEL&&alt.voll!==false&&jetztVoll);
   aufRegelNeu=!!(alt&&!passt);
+  aufPensumGrund=!alt||passt?'':(regelAlt!==AUF_REGEL?'regel'
+    :(!jetztVoll?'jetzt':'vorher'));
   const pensum=Object.assign({},(passt&&alt&&alt.pensum)||{},jetzt);
   // Die Anzeige liest denselben Stand. Das Zuweisen hier ist der einzige Ort,
   // an dem er entsteht — es gibt keine zweite Rechnung.
@@ -6171,6 +6186,9 @@ function kennAufgaben(alt,tag){
     entfPerson,
     // Die Regelfassung, unter der dieses Pensum entstanden ist.
     regel:AUF_REGEL,
+    // Stand dieser Lauf auf vollstaendigen Daten? Wer das spaeter liest, muss
+    // wissen, ob er die Zahlen fortschreiben darf.
+    voll:jetztVoll,
     ueberfaellig,ohneZuweisung,jeBereich,jeKat};
 }
 
@@ -8220,10 +8238,15 @@ function tzGeschafft(erledigt,ent,istPensumTag){
   h+='</div>';
   // Die Zuordnung je Person (ent.jePerson) wird weiter gerechnet und ist
   // getestet, aber derzeit NICHT angezeigt — auf Wunsch erst einmal raus.
-  if(aufRegelNeu)h+='<div class="auf-zustand" style="margin-top:12px">'
-    +'Die Rechenregeln wurden heute geändert. Das Pensum dieses Tages wurde deshalb neu '
-    +'begonnen — was vorher schon gezählt war, steht nicht mehr darin. Sonst sähe der '
-    +'Unterschied zwischen alter und neuer Regel aus wie geleistete Arbeit.</div>';
+  if(aufRegelNeu)h+='<div class="auf-zustand auf-zustand-fehler" style="margin-top:12px">'
+    +(aufPensumGrund==='regel'
+      ?'Die Rechenregeln wurden heute geändert.'
+      :aufPensumGrund==='jetzt'
+      ?'Gerade fehlt eine Pflichtdatei — die Aufgabenliste ist unvollständig.'
+      :'Ein früherer Lauf heute stand auf unvollständigen Daten.')
+    +' Das Pensum dieses Tages wurde deshalb neu begonnen — was vorher gezählt war, steht '
+    +'nicht mehr darin. Sonst sähe der Unterschied zwischen zwei Datenständen aus wie '
+    +'geleistete Arbeit.</div>';
   // Fehlt die Termin-Historie, fallen alle Verplanungs-Aufgaben weg. Das darf
   // nicht wie Feierabend aussehen — der Grund gehoert an dieselbe Stelle.
   const histHin=histFehltText(typeof tzLoc!=='undefined'?tzLoc:TZ_ALLE);

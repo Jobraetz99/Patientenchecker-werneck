@@ -272,6 +272,12 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--bg)
 .fsw.a b{color:var(--primary)}
 /* Protokollzustand. Eigene Zeile, damit eine Fehlermeldung nicht hinter dem
    zugeklappten Teamknopf verschwindet. */
+#ladeBanner:empty{display:none}
+#ladeBanner{position:sticky;top:0;z-index:900;background:var(--red);color:#fff;
+  padding:11px 16px;font-size:13.5px;line-height:1.5}
+#ladeBanner b{display:block;font-size:14px;margin-bottom:2px}
+#ladeBanner button{margin-left:10px;background:#fff;color:var(--red);border:0;border-radius:6px;
+  padding:5px 11px;font-weight:600;cursor:pointer}
 .auf-zustand{font-size:11.5px;color:var(--muted);margin:-8px 0 14px}
 .auf-zustand-fehler{color:var(--fire);font-weight:550}
 /* Die Aufgabenleiste in der Rezepttabelle. Sie darf die Tabelle nicht
@@ -915,7 +921,7 @@ body{
 <div id="lo"><div class="lb"><h1>Praxismanagement</h1><p>KIMOJO Werneck · To-Do's & Controlling</p><button class="l-btn" onclick="signIn()"><svg viewBox="0 0 21 21" width="20" height="20"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>Mit Microsoft anmelden</button><div class="l-err" id="er"></div></div></div>
 <div class="loading h" id="ld"><div class="spinner"></div><p id="lt">Lade...</p></div>
 <div id="db"><div class="mx">
-<div class="hdr"><h1>☀️ <span>Praxis</span><span class="acc">management</span> Werneck</h1><div class="hdr-r"><span class="demo-badge">🏥 KIMOJO WERNECK</span><span id="bld" style="font-size:10px;color:var(--muted)" title="Fassung dieser Seite"></span><span id="lastUp" style="font-size:11px;color:var(--muted)"></span><button class="hdr-btn" onclick="loadAll()">↻ Neu laden</button><button class="hdr-btn" onclick="signOut()">Abmelden</button></div></div>
+<div id="ladeBanner"></div><div class="hdr"><h1>☀️ <span>Praxis</span><span class="acc">management</span> Werneck</h1><div class="hdr-r"><span class="demo-badge">🏥 KIMOJO WERNECK</span><span id="bld" style="font-size:10px;color:var(--muted)" title="Fassung dieser Seite"></span><span id="lastUp" style="font-size:11px;color:var(--muted)"></span><button class="hdr-btn" onclick="loadAll()">↻ Neu laden</button><button class="hdr-btn" onclick="signOut()">Abmelden</button></div></div>
 <div class="main-tabs" id="mainTabs"></div>
 <div id="mc"></div>
 </div></div>
@@ -1165,10 +1171,92 @@ async function resolveDrive(k){const s=SITES[k];const site=await gql(`https://gr
 // von vor Stunden — sichtbar daran, dass das Dashboard "heute keine Anrufe"
 // meldet, während der Flow längst geschrieben hat. Ein Reload half nicht,
 // weil der Browser gar nicht erst fragte.
-async function loadJSON(p){const f=BASE+p;const e=f.split('/').filter(s=>s).map(s=>encodeURIComponent(s)).join('/');const r=await fetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+e+':/content',{cache:'no-store',headers:{Authorization:'Bearer '+window._token,'Cache-Control':'no-cache'}});if(!r.ok)return null;return JSON.parse((await r.text()).replace(/^\uFEFF/,''));}
+// ═══════════════════════════════════════════════════════════════════════════
+// DATEIEN LADEN — ein Fehlschlag darf nicht still bleiben
+// ═══════════════════════════════════════════════════════════════════════════
+// Bis zum 16.10.2026 stand hier `if(!r.ok)return null;` — ohne Log, ohne
+// zweiten Versuch, ohne Spur. Genau einmal hat das gereicht: Die Termin-
+// Historie (4,7 MB, die groesste Datei und eine der letzten im Ladelauf) kam
+// nicht an, und weil "gebucht" dann bei jedem Rezept null ist, standen 311
+// statt 82 Patienten unter "Verplanung" — jeder durchgeplante sah aus wie ein
+// steckengebliebener. Das Dashboard hat niemanden gewarnt.
+//
+// Drei Dinge dagegen, in dieser Reihenfolge:
+//   1. Es wird wiederholt. Drosselung (429), Serverfehler (5xx) und
+//      Netzaussetzer sind voruebergehend; ein zweiter Versuch nach kurzer
+//      Pause raeumt sie fast immer weg.
+//   2. Bei 401 wird EINMAL ein frisches Token geholt. Ein langer Ladelauf
+//      kann die Gueltigkeit ueberschreiten, dann trifft es die spaeten Dateien.
+//   3. Was endgueltig fehlt, wird vermerkt — ladeFehler. Wer rechnet, kann
+//      nachsehen, ob seine Grundlage ueberhaupt da ist.
+const ladeFehler={};          // Dateiname -> Grund
+const LADE_VERSUCHE=3;
+function ladeFehlerListe(){return Object.keys(ladeFehler);}
+const schlaf=ms=>new Promise(r=>setTimeout(r,ms));
+
+async function ladeRoh(pfad,etikett){
+  const e=pfad.split('/').filter(s=>s).map(s=>encodeURIComponent(s)).join('/');
+  const url='https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+e+':/content';
+  let frisch=false, grund='';
+  for(let v=1;v<=LADE_VERSUCHE;v++){
+    let r=null;
+    try{
+      r=await fetch(url,{cache:'no-store',
+        headers:{Authorization:'Bearer '+window._token,'Cache-Control':'no-cache'}});
+    }catch(err){
+      grund='Netzwerk: '+(err&&err.message||err);
+      if(v<LADE_VERSUCHE){await schlaf(400*v);continue;}
+      break;
+    }
+    if(r.ok){
+      const txt=await r.text().catch(()=>null);
+      if(txt==null){grund='Antwort nicht lesbar';if(v<LADE_VERSUCHE){await schlaf(400*v);continue;}break;}
+      try{
+        const o=JSON.parse(txt.replace(/^\uFEFF/,''));
+        delete ladeFehler[etikett];
+        return o;
+      }catch(err){
+        // Die Flows schreiben die Dateien laufend neu. Wer mitten im Schreiben
+        // liest, bekommt ein halbes JSON — das ist voruebergehend, also nochmal.
+        grund='Datei unvollstaendig oder kein JSON';
+        if(v<LADE_VERSUCHE){await schlaf(600*v);continue;}
+        break;
+      }
+    }
+    if(r.status===404){grund='nicht vorhanden (404)';break;}   // da hilft kein Warten
+    if(r.status===401&&!frisch){
+      frisch=true;
+      try{const t=await getToken();if(t)window._token=t;}catch(_){}
+      continue;                                                 // ohne Zaehler
+    }
+    grund='HTTP '+r.status;
+    if(v<LADE_VERSUCHE){
+      const ra=parseInt(r.headers.get('Retry-After')||'0',10);
+      await schlaf(ra>0?Math.min(ra*1000,5000):500*v);
+      continue;
+    }
+  }
+  ladeFehler[etikett]=grund;
+  console.error('Laden fehlgeschlagen:',etikett,'—',grund);
+  return null;
+}
+async function loadJSON(p){return ladeRoh(BASE+p,p);}
+
+// Was nicht geladen werden konnte, steht oben — in jedem Reiter, nicht nur in
+// dem, der es zufaellig braucht. Eine Zahl, deren Grundlage fehlt, ist keine
+// Zahl; wer das nicht sieht, arbeitet nach erfundenen Listen.
+function ladeBannerZeigen(){
+  const el=document.getElementById('ladeBanner');if(!el)return;
+  const f=ladeFehlerListe();
+  if(!f.length){el.innerHTML='';return;}
+  el.innerHTML='<b>⚠️ '+f.length+' Datei'+(f.length===1?'':'en')+' konnte'+(f.length===1?'':'n')
+    +' nicht geladen werden — die Zahlen auf dieser Seite sind unvollständig.</b>'
+    +f.map(n=>esc(n)+' ('+esc(ladeFehler[n])+')').join(' · ')
+    +'<button onclick="loadAll()">↻ Nochmal laden</button>';
+}
 // Wie loadJSON, nur ohne BASE davor. Für Dateien, die sich beide Dashboards
 // teilen und deshalb nicht im Standort-Ordner liegen dürfen (z. B. Telefonie).
-async function loadJSONAbs(f){const e=f.split('/').filter(s=>s).map(s=>encodeURIComponent(s)).join('/');const r=await fetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+e+':/content',{cache:'no-store',headers:{Authorization:'Bearer '+window._token,'Cache-Control':'no-cache'}});if(!r.ok)return null;return JSON.parse((await r.text()).replace(/^\uFEFF/,''));}
+async function loadJSONAbs(f){return ladeRoh(f,f.split('/').pop());}
 async function gqlPatch(url,body){return fetch(url,{method:'PATCH',headers:{Authorization:'Bearer '+window._token,'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.ok?r.json():null);}
 // ---- Nachrücker-Notizen (geteilt über SharePoint) ----
 // Schreibt ein JS-Objekt als JSON-Datei zurück nach SharePoint (PUT .../content).
@@ -1477,6 +1565,12 @@ async function loadAll(){
         const hDs=hTP.length?String(hTP[0].Beginn).slice(0,10):isoDay(0);
         const mDs=mTP.length?String(mTP[0].Beginn).slice(0,10):hDs;
         const hist=histMap(histRoh,hDs);
+        // Die Historie ist fuer "Verplanung" keine Zusatzinformation, sondern
+        // die halbe Rechnung: ohne sie ist "gebucht" bei JEDEM Rezept null und
+        // jeder durchgeplante Patient sieht aus wie ein steckengebliebener.
+        // Am 16.10.2026 standen so 311 statt 82 Patienten in der Liste.
+        // Gemerkt wird das hier, benutzt wird es dort, wo gerechnet wird.
+        histFehlt[loc.id]=!hist||!hist.vo;
         // Rohdaten für die neuen Reiter aufheben (siehe VOD oben). Reines Merken,
         // keine zusätzliche Rechnung, keine zusätzliche Ladezeit.
         VOD[loc.id]={vo,det:detMap(det),hist,heuteDs:hDs};
@@ -1526,6 +1620,7 @@ async function loadAll(){
       lt.textContent='Prüfe Patienten...';await autoDetectWLPatients(allRows);
     }
 
+    ladeBannerZeigen();
     document.getElementById('db').style.display='block';
     document.getElementById('lastUp').textContent='⏱ '+new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
     if(BUILD_ID)buildPruefen();else buildStart();
@@ -7338,10 +7433,28 @@ function vpZustand(erbracht,gebucht){
   if(gebucht>0)return'teil';
   return erbracht>0?'steck':'neu';
 }
+// Welche Standorte ohne Termin-Historie dastehen. Leer heisst: alles da.
+const histFehlt={};
+function histFehltWo(locId){
+  const ids=locId===TZ_ALLE?LOCS.map(l=>l.id):[locId];
+  return ids.filter(id=>histFehlt[id]&&VOD[id]&&VOD[id].vo);
+}
+function histFehltText(locId){
+  const w=histFehltWo(locId);
+  if(!w.length)return '';
+  const namen=w.map(id=>(LOCS.find(l=>l.id===id)||{label:id}).label).join(' und ');
+  return 'Die Termin-Historie für '+namen+' ist nicht geladen. Ohne sie weiß das '
+    +'Dashboard nicht, welche Termine schon gebucht sind — jedes Rezept sähe dann '
+    +'unverplant aus, auch ein längst durchgeplantes. Diese Liste bleibt deshalb leer, '
+    +'bis die Datei da ist. Abhilfe: oben auf „↻ Neu laden“.';
+}
 const _verplanCache={};
 function buildVerplanung(locId){
   if(locId in _verplanCache)return _verplanCache[locId];
   const D=VOD[locId];if(!D||!D.vo)return(_verplanCache[locId]=[]);
+  // Ohne Historie ist "gebucht" nicht null, sondern unbekannt. Eine Liste aus
+  // Unbekanntem ist keine Arbeitsliste, sondern erfundene Arbeit.
+  if(!D.hist||!D.hist.vo)return(_verplanCache[locId]=[]);
   const nodes=voNodes(D.vo)||[];
   const H=(D.hist&&D.hist.vo)?D.hist.vo:null;
   const P={};
@@ -8100,6 +8213,11 @@ function tzGeschafft(erledigt,ent,istPensumTag){
     +'Die Rechenregeln wurden heute geändert. Das Pensum dieses Tages wurde deshalb neu '
     +'begonnen — was vorher schon gezählt war, steht nicht mehr darin. Sonst sähe der '
     +'Unterschied zwischen alter und neuer Regel aus wie geleistete Arbeit.</div>';
+  // Fehlt die Termin-Historie, fallen alle Verplanungs-Aufgaben weg. Das darf
+  // nicht wie Feierabend aussehen — der Grund gehoert an dieselbe Stelle.
+  const histHin=histFehltText(typeof tzLoc!=='undefined'?tzLoc:TZ_ALLE);
+  if(histHin)h+='<div class="auf-zustand auf-zustand-fehler" style="margin-top:12px">⚠️ '
+    +esc(histHin)+' Bis dahin fehlen hier alle Aufgaben zum Verplanen.</div>';
   // Der Standort-Hinweis. Solange Einträge ohne Standortangabe im Pensum
   // stehen, addieren sich die Reiter nicht — das muss dastehen, sonst hält man
   // die Zahlen für kaputt.
@@ -8541,7 +8659,9 @@ function renderVerplanung(){
   const zN=z=>rows.filter(r=>r.zust===z).length;
   const eh=a=>a.reduce((s,r)=>s+r.rest,0);
 
+  const fehlt=histFehltText(vpLoc);
   let h='<div class="summary"><h2>🗓️ Verplanung · '+esc(loc.label)+'</h2>'
+    +(fehlt?'<div class="auf-zustand auf-zustand-fehler" style="margin:6px 0 12px">⚠️ '+esc(fehlt)+'</div>':'')
     +'<div class="tz-lead">Laufende Rezepte, auf denen Einheiten liegen, die weder erbracht noch als Termin gebucht sind. '
     +'Gerechnet wird <b>verordnet − erbracht − gebucht</b>: ein schon gelegter Zukunftstermin zählt nicht mehr als offen, '
     +'ein abgesagter gibt seine Einheit zurück.</div>'

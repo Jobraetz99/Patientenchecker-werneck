@@ -4029,6 +4029,12 @@ function voHausbesuch(v,det){
 
 function buildRezepteTV(voRoh,dd,refDs,detRoh,hist){
   const cat={bvb:[],blanko:[],blankopot:[],folge:[],reserv:[],freq:[],nr:[],hbAus:[]};
+  // Die Terminhistorie je Verordnung. Sie stand dieser Funktion schon immer als
+  // Parameter zur Verfuegung und wurde nie gelesen — daher die ueberhoehten
+  // Offen-Zahlen. Fehlt sie, bleibt es beim thevea-Zaehler; dass sie fehlt,
+  // meldet das Ladeband oben.
+  const HVO=(hist&&hist.vo)?hist.vo:null;
+  const HV=id=>(HVO&&id!=null)?(HVO[String(id)]||null):null;
   const nodes=voNodes(voRoh);
   if(!nodes)return cat;
 
@@ -4114,8 +4120,19 @@ function buildRezepteTV(voRoh,dd,refDs,detRoh,hist){
         P.blBvb=!!(D&&D.bvb);
       }
     }else{
-      P.offen+=Math.max(0,voKann(v)-voErb(v));
-      P.erbracht+=voErb(v);
+      // Dreigliedrig, genau wie in buildVerplanung: verordnet − erbracht −
+      // gebucht. Bis zum 20.10.2026 stand hier nur verordnet − voErb, also
+      // allein thevea's Zaehler. Der haengt an der Behandlungsdokumentation
+      // und stand bei Birgit Hughett auf 0, obwohl alle sechs Termine
+      // stattgefunden hatten — sie erschien als Nachruecker mit "6 offen",
+      // einen Tag nach ihrem letzten Termin, auf einem vollen Rezept.
+      // Betroffen waren 289 von 408 laufenden Rezepten, zusammen 1493
+      // Einheiten, die es nicht mehr zu vergeben gab.
+      const hv=HV(v.id);
+      const erbV=Math.max(voErb(v),hv?hv.n:0);
+      const gebV=hv?hv.nZ:0;
+      P.offen+=Math.max(0,voKann(v)-erbV-gebV);
+      P.erbracht+=erbV;
       P.gesamt+=voKann(v);
       if(ad&&(!P.aeltestes||ad<P.aeltestes))P.aeltestes=ad;
     }

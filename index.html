@@ -1966,7 +1966,7 @@ function getRezEndePatients(locId,day){
       time:apptDate,timeStr:fmt(apptDate),
       heilmittel:t.Bezeichnung||t.Heilmittel||(vo?String(vo.heilmittel||''):''),
       positionNum,totalY,besuchNum,besuche:tage.length,
-      position:isLetzter?'letzter':'vorletzter',folge
+      position:isLetzter?'letzter':'vorletzter',folge,ende:lastDs
     });
   });
   rows.sort((a,b)=>a.time-b.time); // zeitlich aufsteigend
@@ -6050,10 +6050,15 @@ function kennLoc(locId,sub){
     //   p = l(etzter) | v(orletzter)
     //   f = 1, wenn schon ein Folgetermin steht — dann laeuft die Therapie
     //       weiter und ein Gespraech ist nicht faellig
+    //   id/v = Patienten- und Rezept-Id aus thevea: ein Fall ist ein Rezept,
+    //       auch wenn der Patient am vorletzten UND am letzten Termin auftaucht
+    //   th = Therapeut des Termins — wer das Gespraech fuehren sollte
+    //   e  = Tag des letzten Termins; ab ihm laeuft die Frist fuer das Gespraech
     ansprechen:(()=>{
       try{
         return getRezEndePatients(locId,sub).map(r=>({
-          n:r.name,p:r.position==='letzter'?'l':'v',f:r.folge?1:0}));
+          n:r.name,p:r.position==='letzter'?'l':'v',f:r.folge?1:0,
+          id:String(r.pid),v:String(r.vid),th:r.therapeut||'',e:r.ende||''}));
       }catch(e){return[];}
     })()};
 }

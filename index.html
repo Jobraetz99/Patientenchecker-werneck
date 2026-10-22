@@ -5728,7 +5728,10 @@ const KENN_DIR='/12_Code/Patientenchecker/Dateien Export/kennzahlen/';
 // die anders gemeint waren — die Auslastung aus der Zeit vor dem Fehlerfund,
 // die Aufgabenquote aus der Zeit vor dem Pensum. Unvollständig wäre
 // hinnehmbar, falsch nicht.
-const KENN_V=4;
+// 5 seit dem 22.10.2026: je Standort und Tag steht jetzt die Liste
+//   "ansprechen" dabei — wer am letzten oder vorletzten Rezepttermin stand.
+//   Sie ist der Startpunkt der Club-Reise im Verantwortlichen-Dashboard.
+const KENN_V=5;
 function kennDatei(monat){return KENN_DIR+'kennzahlen-'+monat+'.json';}
 
 // ── Die Aufgabenliste des Tages ────────────────────────────────────────────
@@ -6034,7 +6037,25 @@ function kennLoc(locId,sub){
         geraten:sum(B,x=>x.geraten),beh:sum(B,x=>x.n),
         ziel:HB_ZIEL};
     })(),
-    thListe:th};
+    thListe:th,
+    // ── Startpunkt der Club-Reise ──────────────────────────────────────────
+    // Wer heute am letzten oder vorletzten Rezepttermin steht, muesste
+    // angesprochen werden — genau diese Liste steht im Reiter "Rezept-Ende".
+    // Das Verantwortlichen-Dashboard braucht sie, um sie gegen die gefuehrten
+    // Gespraeche aus MyWellness zu halten: Wer stand an, und mit wem wurde
+    // wirklich gesprochen? Die Zahl wird hier EINMAL gerechnet und
+    // weitergereicht; wer sie drueben noch einmal rechnete, haette zwei
+    // Wahrheiten.
+    //   n = Name (der einzige Schluessel, den beide Systeme teilen)
+    //   p = l(etzter) | v(orletzter)
+    //   f = 1, wenn schon ein Folgetermin steht — dann laeuft die Therapie
+    //       weiter und ein Gespraech ist nicht faellig
+    ansprechen:(()=>{
+      try{
+        return getRezEndePatients(locId,sub).map(r=>({
+          n:r.name,p:r.position==='letzter'?'l':'v',f:r.folge?1:0}));
+      }catch(e){return[];}
+    })()};
 }
 
 // Der Aufgabenstand von heute — über ALLE Standorte und ohne die Schalter des

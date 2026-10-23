@@ -6328,6 +6328,29 @@ async function kennAltLaden(pfad){
   }
   return{fehler:'unbekannt'};
 }
+// Sicherung neben der Monatsdatei. Patientenchecker-Fenster, die seit Tagen
+// offen sind und eine alte Fassung laufen haben, werfen die Vortage der
+// Monatsdatei weg (am 22./23.10.2026 mehrfach). Die Sicherung kennen sie
+// nicht und fassen sie deshalb nicht an. Jeder Lauf der neuen Fassung holt
+// verlorene Tage aus ihr zurück.
+function kennSicherung(pfad){return pfad.replace(/\.json$/,'-sicherung.json');}
+// Tage, die in der Hauptdatei fehlen oder ihre Zahlen verloren haben, aus der
+// Sicherung auffüllen. Was in der Hauptdatei steht, gewinnt; die Telefonie
+// des Tages bleibt die frischere aus der Hauptdatei.
+function kennZusammen(haupt,sich){
+  const voll=t=>!!(t&&t.loc&&Object.keys(t.loc).length);
+  if(!sich||!Array.isArray(sich.tage))return haupt;
+  const basis=haupt&&Array.isArray(haupt.tage)?haupt:{v:KENN_V,tage:[]};
+  const proTag={};basis.tage.forEach(t=>{if(t&&t.ds)proTag[t.ds]=t;});
+  sich.tage.forEach(t=>{
+    if(!t||!t.ds||!voll(t))return;
+    const h=proTag[t.ds];
+    if(voll(h))return;
+    const n=Object.assign({},t);if(h&&h.tel)n.tel=h.tel;proTag[t.ds]=n;
+  });
+  return Object.assign({},basis,{v:Math.min(KENN_V,Math.max(basis.v||0,KENN_V_MIN)),
+    tage:Object.keys(proTag).sort().map(k=>proTag[k])});
+}
 async function kennSchreiben(){
   const pfad=kennDatei(aufMonatVon(Date.now()));
   // Ging das Lesen nicht, wird NICHT geschrieben. Lieber eine Runde ohne
@@ -6338,8 +6361,12 @@ async function kennSchreiben(){
   if(alt.fehler){console.warn('Kennzahlen: alte Datei nicht lesbar ('+alt.fehler+') — diesmal nicht geschrieben');return false;}
   if(alt.da&&(typeof alt.da.v!=='number'||alt.da.v>KENN_V||!Array.isArray(alt.da.tage))){
     console.warn('Kennzahlen: Datei stammt von einer anderen Fassung (v'+(alt.da&&alt.da.v)+') — nicht überschrieben');return false;}
-  const datei=kennBau(alt.da||null);
+  let sich;try{sich=await kennAltLaden(kennSicherung(pfad));}catch(e){sich={fehler:String(e&&e.message||e)};}
+  const datei=kennBau(kennZusammen(alt.da||null,sich.da||null));
   const ok=await saveJSONAbs(pfad,datei);
+  // Die Sicherung nur schreiben, wenn sie gelesen werden konnte — sonst
+  // ersetzte ein Lesefehler sie durch eine womöglich schon gekürzte Fassung.
+  if(ok&&!sich.fehler){try{await saveJSONAbs(kennSicherung(pfad),datei);}catch(e){}}
   // Die Aufgabenliste des Tages daneben. Eigene Datei, eigener Fehlerfall: Ein
   // Fehlschlag hier darf die Kennzahlen nicht mitreißen — die sind die
   // wichtigere Zahl, die Liste ist die Bequemlichkeit.

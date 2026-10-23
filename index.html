@@ -5732,6 +5732,11 @@ const KENN_DIR='/12_Code/Patientenchecker/Dateien Export/kennzahlen/';
 //   "ansprechen" dabei — wer am letzten oder vorletzten Rezepttermin stand.
 //   Sie ist der Startpunkt der Club-Reise im Verantwortlichen-Dashboard.
 const KENN_V=5;
+// 4 und 5 meinen dieselben Zahlen, 5 hat nur die Liste "ansprechen" dazu-
+// bekommen. Eine Datei der Fassung 4 wird deshalb weitergefuehrt, nicht
+// verworfen: Solange in der Praxis noch ein Rechner die alte Fassung offen
+// hat, schreiben beide abwechselnd — und jedes Verwerfen loeschte den Monat.
+const KENN_V_MIN=4;
 function kennDatei(monat){return KENN_DIR+'kennzahlen-'+monat+'.json';}
 
 // ── Die Aufgabenliste des Tages ────────────────────────────────────────────
@@ -6256,7 +6261,7 @@ function kennDatenTag(){
 function kennBau(vorhanden){
   const monat=aufMonatVon(Date.now());
   const proTag={};
-  if(vorhanden&&vorhanden.v===KENN_V&&Array.isArray(vorhanden.tage))
+  if(vorhanden&&vorhanden.v>=KENN_V_MIN&&vorhanden.v<=KENN_V&&Array.isArray(vorhanden.tage))
     vorhanden.tage.forEach(t=>{if(t&&t.ds)proTag[t.ds]=t;});
 
   // Telefonie für den GANZEN Monat jedes Mal neu. Webex trägt Gespräche
@@ -6298,10 +6303,42 @@ function kennBau(vorhanden){
     tage:Object.keys(proTag).sort().map(k=>proTag[k])};
 }
 
+// Vor dem Schreiben die alte Datei lesen — und dabei unterscheiden, ob es sie
+// noch nicht gibt oder ob das Lesen gerade nicht ging. ladeRoh liefert in
+// beiden Faellen null. Am 23.10.2026 hat so ein misslungenes Lesen am Morgen
+// dazu gefuehrt, dass der ganze Oktober mit einem einzigen Tag ueberschrieben
+// wurde: Auslastung, Aufgaben und Rezeptende-Listen aller Vortage waren weg.
+async function kennAltLaden(pfad){
+  const e=pfad.split('/').filter(s=>s).map(s=>encodeURIComponent(s)).join('/');
+  const url='https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+e+':/content';
+  let frisch=false;
+  for(let v=1;v<=LADE_VERSUCHE;v++){
+    let r=null;
+    try{r=await fetch(url,{cache:'no-store',headers:{Authorization:'Bearer '+window._token,'Cache-Control':'no-cache'}});}
+    catch(err){if(v<LADE_VERSUCHE){await schlaf(400*v);continue;}return{fehler:'Netzwerk'};}
+    if(r.status===404)return{neu:true};
+    if(r.status===401&&!frisch){frisch=true;try{const t=await getToken();if(t)window._token=t;}catch(_){}v--;continue;}
+    if(r.ok){
+      const txt=await r.text().catch(()=>null);
+      try{return{da:JSON.parse(String(txt).replace(/^\uFEFF/,''))};}
+      catch(err){if(v<LADE_VERSUCHE){await schlaf(600*v);continue;}return{fehler:'Datei unvollstaendig'};}
+    }
+    if(v<LADE_VERSUCHE){await schlaf(500*v);continue;}
+    return{fehler:'HTTP '+r.status};
+  }
+  return{fehler:'unbekannt'};
+}
 async function kennSchreiben(){
   const pfad=kennDatei(aufMonatVon(Date.now()));
-  let alt=null;try{alt=await loadJSONAbs(pfad);}catch(e){}
-  const datei=kennBau(alt);
+  // Ging das Lesen nicht, wird NICHT geschrieben. Lieber eine Runde ohne
+  // neuen Stand (der naechste Takt versucht es wieder) als ein Monat weniger.
+  // Und eine Datei, die eine neuere Fassung geschrieben hat, fasst eine alte
+  // nicht an.
+  let alt;try{alt=await kennAltLaden(pfad);}catch(e){alt={fehler:String(e&&e.message||e)};}
+  if(alt.fehler){console.warn('Kennzahlen: alte Datei nicht lesbar ('+alt.fehler+') — diesmal nicht geschrieben');return false;}
+  if(alt.da&&(typeof alt.da.v!=='number'||alt.da.v>KENN_V||!Array.isArray(alt.da.tage))){
+    console.warn('Kennzahlen: Datei stammt von einer anderen Fassung (v'+(alt.da&&alt.da.v)+') — nicht überschrieben');return false;}
+  const datei=kennBau(alt.da||null);
   const ok=await saveJSONAbs(pfad,datei);
   // Die Aufgabenliste des Tages daneben. Eigene Datei, eigener Fehlerfall: Ein
   // Fehlschlag hier darf die Kennzahlen nicht mitreißen — die sind die
@@ -6320,7 +6357,7 @@ async function kennSchreiben(){
 // Management-Dashboard würde einen Rückstand melden, den es nicht gibt.
 async function kennStart(){
   try{await kennPensumLaden();}catch(e){}
-  try{await kennSchreiben();}catch(e){console.warn('Kennzahlen:',e);}
+  try{if(!await kennSchreiben())kennSchmutzig=true;}catch(e){kennSchmutzig=true;console.warn('Kennzahlen:',e);}
   // Die vergangenen Tage des laufenden und des Vormonats mitladen: Ohne sie
   // bliebe die Rückblick-Auswahl leer, und niemand käme auf die Idee, dass es
   // sie gibt.

@@ -1252,14 +1252,33 @@ async function loadJSON(p,still){return ladeRoh(BASE+p,p,still);}
 // Was nicht geladen werden konnte, steht oben — in jedem Reiter, nicht nur in
 // dem, der es zufaellig braucht. Eine Zahl, deren Grundlage fehlt, ist keine
 // Zahl; wer das nicht sieht, arbeitet nach erfundenen Listen.
+// Termindaten, die nicht von heute sind, obwohl heute ein Praxistag ist. Am
+// 26.10.2026 lief der Physio-Flow seit Freitag nicht mehr, und „Heute" zeigte
+// stillschweigend die Patienten vom Freitag. Eine Datei, die geladen wurde,
+// ist noch keine Datei von heute.
+function datenVeraltet(){
+  const wd=new Date().getDay();if(wd===0||wd===6)return[];
+  const heute=isoDay(0),out=[],seen=new Set();
+  LOCS.forEach(l=>{
+    if(seen.has(l.suf))return;seen.add(l.suf);
+    const tp=DATA[l.suf]&&DATA[l.suf].heute&&DATA[l.suf].heute.tp;
+    const ds=Array.isArray(tp)&&tp.length?tp.map(x=>String(x&&x.Beginn||'').slice(0,10)).filter(Boolean).sort().pop():'';
+    if(ds&&ds<heute)out.push({label:l.label,ds});
+  });
+  return out;
+}
 function ladeBannerZeigen(){
   const el=document.getElementById('ladeBanner');if(!el)return;
-  const f=ladeFehlerListe();
-  if(!f.length){el.innerHTML='';return;}
-  el.innerHTML='<b>⚠️ '+f.length+' Datei'+(f.length===1?'':'en')+' konnte'+(f.length===1?'':'n')
+  const f=ladeFehlerListe(),alt=datenVeraltet();
+  if(!f.length&&!alt.length){el.innerHTML='';return;}
+  let h='';
+  if(alt.length)h+='<b>⚠️ „Heute" zeigt nicht den heutigen Tag.</b>'
+    +alt.map(a=>esc(a.label)+': Termindaten vom '+esc(new Date(a.ds+'T12:00').toLocaleDateString('de-DE',{weekday:'short',day:'2-digit',month:'2-digit'})))
+      .join(' · ')+' — der thevea-Flow hat seitdem nichts geliefert. Bitte in Power Automate prüfen.';
+  if(f.length)h+=(h?'<br>':'')+'<b>⚠️ '+f.length+' Datei'+(f.length===1?'':'en')+' konnte'+(f.length===1?'':'n')
     +' nicht geladen werden — die Zahlen auf dieser Seite sind unvollständig.</b>'
-    +f.map(n=>esc(n)+' ('+esc(ladeFehler[n])+')').join(' · ')
-    +'<button onclick="loadAll()">↻ Nochmal laden</button>';
+    +f.map(n=>esc(n)+' ('+esc(ladeFehler[n])+')').join(' · ');
+  el.innerHTML=h+'<button onclick="loadAll()">↻ Nochmal laden</button>';
 }
 // Wie loadJSON, nur ohne BASE davor. Für Dateien, die sich beide Dashboards
 // teilen und deshalb nicht im Standort-Ordner liegen dürfen (z. B. Telefonie).

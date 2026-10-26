@@ -1247,7 +1247,18 @@ async function ladeRoh(pfad,etikett,still){
   return null;
 }
 // Pflichtdatei, solange nichts anderes dabeisteht.
-async function loadJSON(p,still){return ladeRoh(BASE+p,p,still);}
+// Die Mitarbeiterliste eines Termins kommt aus dem Flow als Liste. Am
+// 26.10.2026 kam sie nach einer Flow-Reparatur als Text ("[{\"Id\":…}]") —
+// dann wird sie hier zurueckverwandelt, statt dass jede Stelle daran scheitert.
+function termineNormal(o){
+  if(Array.isArray(o))o.forEach(x=>{
+    if(x&&typeof x.Mitarbeiter==='string'){
+      try{const m=JSON.parse(x.Mitarbeiter);x.Mitarbeiter=Array.isArray(m)?m:[];}catch(e){x.Mitarbeiter=[];}
+    }
+  });
+  return o;
+}
+async function loadJSON(p,still){return termineNormal(await ladeRoh(BASE+p,p,still));}
 
 // Was nicht geladen werden konnte, steht oben — in jedem Reiter, nicht nur in
 // dem, der es zufaellig braucht. Eine Zahl, deren Grundlage fehlt, ist keine

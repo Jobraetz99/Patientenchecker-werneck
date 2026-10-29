@@ -5948,6 +5948,23 @@ function kennTelTage(von,bis){
   });
   return Object.keys(m).sort().map(d=>{const r=telFasse(m[d],d,d);r.tag=d;return r;});
 }
+// Dieselben Tageszeilen je Webex-Standort. Die Gesamtzahl oben mischt
+// Kitzingen und Werneck; wer nur einen Betrieb anzeigt (Controlling,
+// Verantwortlichen-Dashboard), braucht die Zahl seines Standorts. Zeilen ohne
+// Standort fehlen hier bewusst, statt einem Standort zugeschlagen zu werden.
+function kennTelOrte(von,bis){
+  const alle=(telData&&Array.isArray(telData.tage))?telData.tage:[];
+  const m={};
+  alle.forEach(t=>{
+    const d=String((t&&t.tag)||'').slice(0,10),o=String((t&&t.standort)||'').trim();
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(d)||!o)return;
+    if(von&&(d<von||d>bis))return;
+    const z=m[d]||(m[d]={});(z[o]=z[o]||[]).push(t);
+  });
+  const aus={};
+  Object.keys(m).forEach(d=>{aus[d]={};Object.keys(m[d]).forEach(o=>{aus[d][o]=kennTel(telFasse(m[d][o],d,d));});});
+  return aus;
+}
 
 // Ab wie vielen verlorenen Anrufern am Tag überhaupt eine Problemstunde
 // benannt wird. Dieselbe Schwelle wie im Telefonie-Reiter: Darunter schlägt
@@ -6297,9 +6314,11 @@ function kennBau(vorhanden){
   // Telefonie für den GANZEN Monat jedes Mal neu. Webex trägt Gespräche
   // verspätet nach; ein Tag, der gestern 71 % hatte, kann heute 78 % haben.
   // Wer nur den heutigen Tag schreibt, friert den falschen Wert für immer ein.
+  const telOrte=kennTelOrte(monat+'-01',monat+'-31');
   kennTelTage(monat+'-01',monat+'-31').forEach(e=>{
     const t=proTag[e.tag]||(proTag[e.tag]={ds:e.tag});
     t.tel=kennTel(e);t.ts=Date.now();
+    if(telOrte[e.tag])t.telOrt=telOrte[e.tag];
   });
 
   // Alles andere kennt nur den Tag, den der Export trägt. Für vergangene Tage

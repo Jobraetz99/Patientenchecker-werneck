@@ -1020,6 +1020,11 @@ const STANDORTE={
     // KGG-Block mit nur anderen Behandlungen (kein KGG-Termin darin) ist in
     // Kitzingen ein umgenutzter Platz, kein fehlender KGG-Platz (29.10.2026).
     kggUmnutzung:true,
+    // Prävention-Blöcke sind ab 29.10.2026 IMMER belegte Zeit, wie der KIMOJO
+    // Club in Werneck: Die Teilnehmer buchen künftig selbst in MyWellness, im
+    // Kalender steht dann nur noch der Block. Ob eine Session gut läuft, zeigt
+    // der Therapiemanager aus MyWellness — nicht eine Lücke im Praxismanager.
+    praevImmerBelegt:true,
     // Termin-Archiv: Medifox überschreibt den Wochenplan jede Woche. Ohne
     // Archiv wären die Termine der Vorwoche weg (siehe archivSchreiben).
     archiv:true,
@@ -3278,10 +3283,10 @@ function analyzeDay(tp,az){
   }
   const azById={};if(azValid)azValid.forEach(a=>{azById[a.Id]={az:a.Arbeitszeiten||[],absent:a.IstAbwesend,label:a.Abwesenheitsbezeichnung};});
   const IGNORE=['Christine Franz'];
-  const T={};tp.forEach(t=>{(t.Mitarbeiter||[]).forEach(m=>{const id=m.Id,vn=(m.Vorname||'').trim(),nn=(m.Nachname||'').trim();if(istKeinTherapeut(m))return;if(!vn)return;if(INAKTIVE_MA.has(String(id)))return;if(TEAM_IDS.size&&!TEAM_IDS.has(String(id)))return;if(IGNORE.some(n=>n.toLowerCase()===(vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim()).toLowerCase()))return;if(!T[id])T[id]={vn,nn,dn:vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim(),ar:[],pz:[],pc:0};{const ta0=terminArt(t);if(!(ta0==='grp'&&!grpBelegt(t,tp,id))&&!(ta0==='kgg'&&kggUmgenutzt(t,tp,id)))T[id].ar.push([new Date(t.Beginn),new Date(t.Ende)]);}
+  const T={};tp.forEach(t=>{(t.Mitarbeiter||[]).forEach(m=>{const id=m.Id,vn=(m.Vorname||'').trim(),nn=(m.Nachname||'').trim();if(istKeinTherapeut(m))return;if(!vn)return;if(INAKTIVE_MA.has(String(id)))return;if(TEAM_IDS.size&&!TEAM_IDS.has(String(id)))return;if(IGNORE.some(n=>n.toLowerCase()===(vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim()).toLowerCase()))return;if(!T[id])T[id]={vn,nn,dn:vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim(),ar:[],pz:[],pc:0};{const ta0=terminArt(t);if(!(ta0==='grp'&&!ST.praevImmerBelegt&&!grpBelegt(t,tp,id))&&!(ta0==='kgg'&&kggUmgenutzt(t,tp,id)))T[id].ar.push([new Date(t.Beginn),new Date(t.Ende)]);}
     // Patientenzeit getrennt mitführen: Nur sie darf die Schicht verlängern.
     const ta=terminArt(t);
-    if(ta==='pat'||ta==='kurs'||ta==='aus')T[id].pz.push([new Date(t.Beginn),new Date(t.Ende)]);
+    if(ta==='pat'||ta==='kurs'||ta==='aus'||(ta==='grp'&&ST.praevImmerBelegt))T[id].pz.push([new Date(t.Beginn),new Date(t.Ende)]);
     if(t.PatientId||t.Art===1||t.Art===4)T[id].pc++;});});
   const res=[],absent=[];
   Object.entries(T).forEach(([id,th])=>{
@@ -3355,7 +3360,7 @@ function analyzeDay(tp,az){
       if(ta==='frei')return;                      // liegt außerhalb der Schicht
       // Ein leerer Gruppenblock steht nicht in den belegten Zeiten (siehe
       // oben) und ist damit eine Lücke; ein belegter zählt als Kurs.
-      if(ta==='grp'){if(!grpBelegt(t,tp,id))return;ta='kurs';}
+      if(ta==='grp'){if(!ST.praevImmerBelegt&&!grpBelegt(t,tp,id))return;ta='kurs';}
       // Umgenutzter KGG-Block: Es zählen nur die eingebuchten Termine selbst.
       if(ta==='kgg'&&kggUmgenutzt(t,tp,id))return;
       topf[ta].push(r);

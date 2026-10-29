@@ -3242,13 +3242,16 @@ function kggUmgenutzt(b,tp,mid){
     &&new Date(t.Beginn)<bE&&new Date(t.Ende)>bS);
   return drin.length>0&&!drin.some(t=>KGG_TERMIN_RE.test(String(t.Bezeichnung||'')));
 }
-// Überstundenabbau (29.10.2026): „Überstunden frei", „Ü-Std. abbau". Diese
+// Überstundenabbau und Krank (29.10.2026): „Überstunden frei", „Ü-Std. abbau",
+// „Krank". Diese
 // Zeit ist keine Arbeitszeit — sie wird aus der Schicht HERAUSGESCHNITTEN,
 // zählt also weder als verfügbar noch als nicht verfügbar.
-const TA_FREI=/(ü|ue|u)ber\s*stunden?\s*(frei|abbau|abbauen)|(ü|ue)[\s.-]*std\.?\s*(frei|abbau)|freizeitausgleich/i;
+const TA_FREI=/(ü|ue|u)ber\s*stunden?\s*(frei|abbau|abbauen)|(ü|ue)[\s.-]*std\.?\s*(frei|abbau)|freizeitausgleich|\bkrank(heit|meldung|gemeldet)?\b/i;
 function terminArt(t){
   const bz=String((t&&t.Bezeichnung)||'');
-  if(TA_FREI.test(bz))return'frei';
+  // Nur interne Einträge: ein Patiententermin heißt nie „frei" (und
+  // „Krankengymnastik" trifft das Muster ohnehin nicht).
+  if(TA_FREI.test(bz)&&!(t&&(t.PatientId||t.Art===1||t.Art===4)))return'frei';
   if(TA_BLK_FEST.test(bz))return'blk';
   if(TA_ORGA.test(bz))return'son';
   if(TA_BLK_NAME.test(bz))return'blk';

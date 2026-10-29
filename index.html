@@ -3210,9 +3210,9 @@ const TA_ORGA=/\bplanung\b|vorbereit|\bmeeting\b|besprech/i;
 // Stunde, die am Patienten gearbeitet wurde. Als nicht verfügbar gleicht sie
 // das aus. Eine Pause an ihrer regulären Stelle liegt ausserhalb der Schicht
 // und zählt ohnehin nicht (clip schneidet auf die Schicht zu).
-// Kitzingen (Medifox) dazu: Officezeit, Orgatime, Blogger, Theken Meeting —
-// festgelegt am 29.10.2026. "Orga" allein zählt nicht dazu.
-const TA_BLK_FEST=/\beap\b|\bfl[\s.-]*meeting|b(?:ü|ue|u)ro[\s.-]*zeit|weekly\s*club\s*meeting|pausen?\b|office[\s.-]*zeit|orga[\s.-]*time|blogger|theken[\s.-]*meeting/i;
+// Kitzingen (Medifox) dazu: Officezeit, Orgatime, Orga, Blogger, Theken
+// Meeting, Besprechung Leitung — festgelegt am 29.10.2026.
+const TA_BLK_FEST=/\beap\b|\bfl[\s.-]*meeting|b(?:ü|ue|u)ro[\s.-]*zeit|weekly\s*club\s*meeting|pausen?\b|office[\s.-]*zeit|orga[\s.-]*time|(^|[^a-zäöüß])orga([^a-zäöüß]|$)|blogger|theken[\s.-]*meeting|besprechung\s*leitung/i;
 // Gruppenblock: Prävention. Die Teilnehmer stehen als eigene Patiententermine
 // im Block („Kraft-Präventionskurs", „PhFiP Club 1"); in Kitzingen 30 von 33
 // Blöcken der Woche. Steht jemand darin, ist die Zeit über diese Termine
@@ -6700,8 +6700,10 @@ function kennBau(vorhanden){
   // Kitzingen: Die Vortage der laufenden Woche lassen sich nachrechnen. Medifox
   // liefert die ganze Woche mit Beginn und Ende (terminplan_woche_f4) und die
   // Arbeitszeiten jedes Tages (auslastung_historie_f4_voll). Gerechnet wird mit
-  // demselben kennLoc() wie für heute. Nur Tage, die noch KEINEN Stand haben —
-  // was an einem Tag selbst geschrieben wurde, bleibt stehen. Frühere Wochen
+  // demselben kennLoc() wie für heute. Ein Tag, der am Tag selbst geschrieben
+  // wurde, bleibt stehen. Ein schon NACHGERECHNETER Tag wird jedes Mal neu
+  // gerechnet: Er ist ohnehin abgeleitet, und so gilt eine neue Regel
+  // (z. B. Überstundenabbau) auch für die Vortage der Woche. Frühere Wochen
   // nicht: Dafür gibt es in Medifox nur Rezepttermine ohne Dauer und ohne
   // interne Einträge, und eine Auslastung daraus wäre geraten.
   if(STANDORT==='kitzingen'&&datenTag){
@@ -6713,7 +6715,7 @@ function kennBau(vorhanden){
         if(!/^\d{4}-\d{2}-\d{2}$/.test(ds)||ds>=datenTag||ds.slice(0,7)!==monat)return;
         const az=dd.azHist[ds];if(!az)return;
         const t=proTag[ds]||(proTag[ds]={ds});
-        if(t.loc&&t.loc[l.id])return;
+        if(t.loc&&t.loc[l.id]&&!(t.loc[l.id].heute&&t.loc[l.id].heute.nachgerechnet))return;
         dd._nach={tp:tag,az};
         const h=kennLoc(l.id,'_nach');delete dd._nach;
         if(!h)return;

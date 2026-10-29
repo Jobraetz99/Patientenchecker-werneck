@@ -996,6 +996,8 @@ const STANDORTE={
     dat:{pl:'patientenliste_werneck.json',beh:'behandlungen_werneck.json',ergo:'ergo_verordnungen_werneck.json',
          pat:'terminplan_14tage',hist:'auslastung_historie_werneck.json'},
     kggUmnutzung:false,
+    // Werneck archiviert der Flow „Cockpit Monatsarchiv" (Dateien Export/archiv).
+    archiv:false,
     azRoh:true,extraTage:true,absagenRaus:false,telLoc:'alle',quelle:'patientenchecker-werneck'},
   // Medifox schreibt seine Exporte seit jeher nach 12_Code/Controlling, je
   // Filiale mit Endung (_f4 = PhFiP Kitzingen). Termin-Tagesdateien über
@@ -1018,6 +1020,9 @@ const STANDORTE={
     // KGG-Block mit nur anderen Behandlungen (kein KGG-Termin darin) ist in
     // Kitzingen ein umgenutzter Platz, kein fehlender KGG-Platz (29.10.2026).
     kggUmnutzung:true,
+    // Termin-Archiv: Medifox überschreibt den Wochenplan jede Woche. Ohne
+    // Archiv wären die Termine der Vorwoche weg (siehe archivSchreiben).
+    archiv:true,
     azRoh:false,extraTage:false,absagenRaus:true,telLoc:'Kitzingen',quelle:'patientenchecker-kitzingen'}
 };
 const ST=STANDORTE[STANDORT];
@@ -1381,14 +1386,18 @@ async function saveJSONAbs(f,obj){
   const put=()=>fetch(url,{method:'PUT',headers:{Authorization:'Bearer '+window._token,'Content-Type':'application/json'},body:JSON.stringify(obj)});
   let r=await put();
   if(r.status===404){
+    // Alle Ebenen der Reihe nach anlegen, nicht nur die letzte: Für Kitzingen
+    // fehlt beim ersten Schreiben „Dateien Export Kitzingen" UND der Unterordner.
+    // Eine schon vorhandene Ebene antwortet mit 409 — das ist hier kein Fehler.
     const teile=f.split('/').filter(s=>s);teile.pop();
-    const ordner=teile.pop();
-    const eltern=teile.map(s=>encodeURIComponent(s)).join('/');
-    try{
-      await fetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+eltern+':/children',
-        {method:'POST',headers:{Authorization:'Bearer '+window._token,'Content-Type':'application/json'},
-         body:JSON.stringify({name:ordner,folder:{},'@microsoft.graph.conflictBehavior':'fail'})});
-    }catch(_){}
+    for(let i=1;i<teile.length;i++){
+      const eltern=teile.slice(0,i).map(s=>encodeURIComponent(s)).join('/');
+      try{
+        await fetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+eltern+':/children',
+          {method:'POST',headers:{Authorization:'Bearer '+window._token,'Content-Type':'application/json'},
+           body:JSON.stringify({name:teile[i],folder:{},'@microsoft.graph.conflictBehavior':'fail'})});
+      }catch(_){}
+    }
     r=await put();
   }
   if(!r.ok){const t=await r.text().catch(()=>'');console.error('saveJSONAbs FEHLER',r.status,t,'\nURL:',url);window._lastSaveErr='HTTP '+r.status+(t?' – '+t.slice(0,300):'');}
@@ -1550,7 +1559,7 @@ async function loadAll(){
     for(const suf of suffixes){
       lt.textContent='Lade Terminplan'+suf+'...';
       DATA[suf]={heute:{tp:null,az:null},morgen:{tp:null,az:null},woche:{tp:null},extraDays:[]};
-      DATA[suf].heute.tp=ohneAbsagen(await loadJSON('terminplan_heute'+suf+'.json'));
+      {const roh=await loadJSON('terminplan_heute'+suf+'.json');DATA[suf].heuteRoh=Array.isArray(roh)?roh.slice():null;DATA[suf].heute.tp=ohneAbsagen(roh);}
       DATA[suf].morgen.tp=ohneAbsagen(await loadJSON('terminplan_morgen'+suf+'.json'));
       // Arbeitszeiten: bevorzugt aus den thevea-Rohdaten rechnen (siehe buildAZ oben).
       // Fallback auf fertige Tagesdateien, falls der Flow sie doch einmal liefert.
@@ -1567,7 +1576,7 @@ async function loadAll(){
         const ah=await loadJSON(ST.dat.azHist,true);DATA[suf].azHist={};
         (Array.isArray(ah)?ah:[]).forEach(x=>{if(x&&x.onDay&&Array.isArray(x.spalten))DATA[suf].azHist[String(x.onDay).slice(0,10)]=x.spalten;});
       }catch(e){DATA[suf].azHist=null;}}
-      try{DATA[suf].woche.tp=ohneAbsagen(await loadJSON('terminplan_woche'+suf+'.json',true));}catch(e){DATA[suf].woche.tp=null;} // optional: Wochenübersicht (1 Datei)
+      try{const roh=await loadJSON('terminplan_woche'+suf+'.json',true);DATA[suf].wocheRoh=Array.isArray(roh)?roh.map(x=>Array.isArray(x)?x.slice():x):null;DATA[suf].woche.tp=ohneAbsagen(roh);}catch(e){DATA[suf].woche.tp=null;} // optional: Wochenübersicht (1 Datei)
       // Tagesdateien Tag +2..+13. thevea liefert 14 Tage in einem Rutsch (ein getTermine-Call,
       // ca. 0,8 MB / 2 s), der Flow zerlegt das Ergebnis in Tagesdateien. Dadurch ist die
       // Wochenübersicht zwei Wochen weit sichtbar und "Termine ohne Rezept" greift früh genug.
@@ -6804,9 +6813,64 @@ async function kennSchreiben(){
 // Erst nach dem Aufgabenprotokoll. Vorher stünde jede Aufgabe als „offen" in
 // der Datei, deren Haken noch in einer ungelesenen Monatsdatei liegt — und das
 // Management-Dashboard würde einen Rückstand melden, den es nicht gibt.
+// ── Termin-Archiv (Kitzingen) ───────────────────────────────────────────────
+// Damit sich in einem Jahr noch nachsehen lässt, was an einem Tag los war:
+// jeder Termin (auch interne Einträge und Absagen) und die Arbeitszeiten, je
+// Tag, eine Datei je Monat:
+//   Dateien Export Kitzingen/archiv/termine_<loc>_JJJJ-MM.json
+//   {v, standort, monat, stand, tage:{ds:[Termin]}, az:{ds:[Arbeitszeit]}}
+// Geschrieben werden die Tage der laufenden Woche bis heute — heute aus dem
+// Tagesplan (stündlich frisch), die Vortage aus dem Wochenplan. Ein Tag wird
+// mit dem neuesten Stand ersetzt, alle anderen Tage bleiben stehen. Wie bei den
+// Kennzahlen gilt: Lässt sich die alte Datei nicht lesen, wird NICHT
+// geschrieben — sonst ersetzte ein Lesefehler einen ganzen Monat.
+const ARCHIV_V=1;
+function archivTermin(t){
+  return{Id:t.Id,Beginn:t.Beginn,Ende:t.Ende,Status:t.Status==null?null:t.Status,Art:t.Art,
+    Bezeichnung:t.Bezeichnung||'',PatientId:t.PatientId||null,VerordnungId:t.VerordnungId||null,
+    PatientNachname:t.PatientNachname||null,PatientVorname:t.PatientVorname||null,
+    IsHausbesuch:!!t.IsHausbesuch,IsBlocker:!!t.IsBlocker,IsAusserHaus:!!t.IsAusserHaus,
+    Mitarbeiter:(t.Mitarbeiter||[]).map(m=>({Id:m.Id,Vorname:m.Vorname||'',Nachname:m.Nachname||'',Kurzname:m.Kurzname||''}))};
+}
+function archivAz(a){
+  return{Id:a.Id,Vorname:a.Vorname||'',Nachname:a.Nachname||'',Kurzname:a.Kurzname||'',
+    Arbeitszeiten:a.Arbeitszeiten||[],IstAbwesend:!!a.IstAbwesend,Abwesenheitsbezeichnung:a.Abwesenheitsbezeichnung||null};
+}
+async function archivSchreiben(){
+  if(!ST.archiv)return;
+  const heuteDs=isoDay(0);
+  for(const l of LOCS){
+    const dd=DATA[l.suf];if(!dd)continue;
+    // Roh, mit Absagen: Der Plan ohne Absagen (ohneAbsagen) ist für die
+    // Rechnung, das Archiv soll zeigen, was im Kalender stand.
+    const tage={};
+    const nimm=tag=>{if(!Array.isArray(tag)||!tag.length)return;const ds=String(tag[0].Beginn||'').slice(0,10);
+      if(/^\d{4}-\d{2}-\d{2}$/.test(ds)&&ds<=heuteDs)tage[ds]=tag;};
+    ((dd.wocheRoh)||[]).forEach(nimm);
+    if(Array.isArray(dd.heuteRoh)&&dd.heuteRoh.length)nimm(dd.heuteRoh);
+    const proMonat={};
+    Object.keys(tage).forEach(ds=>{(proMonat[ds.slice(0,7)]=proMonat[ds.slice(0,7)]||[]).push(ds);});
+    for(const m of Object.keys(proMonat)){
+      const pfad=ST.ablage+'archiv/termine_'+l.id+'_'+m+'.json';
+      let alt;try{alt=await kennAltLaden(pfad);}catch(e){alt={fehler:String(e)};}
+      if(alt.fehler){console.warn('Archiv '+m+': alte Datei nicht lesbar — nicht geschrieben');continue;}
+      const d=(alt.da&&alt.da.v===ARCHIV_V&&alt.da.tage)?alt.da:{v:ARCHIV_V,standort:ST.name,loc:l.id,monat:m,tage:{},az:{}};
+      d.az=d.az||{};
+      proMonat[m].forEach(ds=>{
+        d.tage[ds]=tage[ds].map(archivTermin);
+        const az=(dd.azHist&&dd.azHist[ds])||(ds===heuteDs&&dd.heute&&dd.heute.az)||null;
+        if(Array.isArray(az))d.az[ds]=az.map(archivAz);
+      });
+      d.stand=Date.now();
+      try{await saveJSONAbs(pfad,d);}catch(e){console.warn('Archiv '+m+':',e);}
+    }
+  }
+}
+
 async function kennStart(){
   try{await kennPensumLaden();}catch(e){}
   try{if(!await kennSchreiben())kennSchmutzig=true;}catch(e){kennSchmutzig=true;console.warn('Kennzahlen:',e);}
+  try{await archivSchreiben();}catch(e){console.warn('Archiv:',e);}
   // Die vergangenen Tage des laufenden und des Vormonats mitladen: Ohne sie
   // bliebe die Rückblick-Auswahl leer, und niemand käme auf die Idee, dass es
   // sie gibt.

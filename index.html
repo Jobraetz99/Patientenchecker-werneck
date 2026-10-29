@@ -1032,8 +1032,12 @@ try{
     +STANDORTE[k].name+'</a>').join('');
 }catch(e){}
 const SP='/sites/KIMOJOManagement',BASE=ST.base;
-// Abgesagt in Medifox: 8, 16, 32. Geplant 1, erbracht 4, 2 in Bearbeitung.
-const MF_ABSAGE=new Set([8,16,32]);
+// Medifox-Status: 1 geplant, 2 in Bearbeitung, 4 erbracht, 8 und 32 abgesagt,
+// 16 „Termin ausgefallen, Patient nicht erschienen". Abgesagte Termine fliegen
+// aus dem Plan. Status 16 BLEIBT: Der Platz war verkauft, in Kitzingen wird
+// dafür eine Ausfallrechnung gestellt (29.10.2026) — das ist keine Lücke.
+const MF_ABSAGE=new Set([8,32]);
+const MF_AUSFALL=16;
 function ohneAbsagen(tp){
   if(!ST.absagenRaus||!Array.isArray(tp))return tp;
   const raus=t=>t&&!Array.isArray(t)&&MF_ABSAGE.has(t.Status);
@@ -1667,6 +1671,9 @@ async function loadAll(){
           histFehlt[loc.id]=!hist||!hist.vo;
           VOD[loc.id]={vo,det:mfDetails(behData),hist,heuteDs:hDs,mf:true};
           if(vo)offenTV=offenTV.concat(buildOffeneTV(vo,loc.label,hDs,DATA[loc.suf],hist));
+          const dd=DATA[loc.suf]||{};
+          offenTV=offenTV.concat(mfAusfaelle(behData,plData,loc.label,hDs,
+            [dd.heute&&dd.heute.tp,dd.woche&&dd.woche.tp]));
         }
       });
     }else{
@@ -3226,8 +3233,13 @@ function kggUmgenutzt(b,tp,mid){
     &&new Date(t.Beginn)<bE&&new Date(t.Ende)>bS);
   return drin.length>0&&!drin.some(t=>KGG_TERMIN_RE.test(String(t.Bezeichnung||'')));
 }
+// Überstundenabbau (29.10.2026): „Überstunden frei", „Ü-Std. abbau". Diese
+// Zeit ist keine Arbeitszeit — sie wird aus der Schicht HERAUSGESCHNITTEN,
+// zählt also weder als verfügbar noch als nicht verfügbar.
+const TA_FREI=/(ü|ue|u)ber\s*stunden?\s*(frei|abbau|abbauen)|(ü|ue)[\s.-]*std\.?\s*(frei|abbau)|freizeitausgleich/i;
 function terminArt(t){
   const bz=String((t&&t.Bezeichnung)||'');
+  if(TA_FREI.test(bz))return'frei';
   if(TA_BLK_FEST.test(bz))return'blk';
   if(TA_ORGA.test(bz))return'son';
   if(TA_BLK_NAME.test(bz))return'blk';
@@ -3303,6 +3315,15 @@ function analyzeDay(tp,az){
       schicht=[[pzM[0][0],pzM[pzM.length-1][1]]];
       twm=(schicht[0][1]-schicht[0][0])/6e4;
     }
+    // Überstundenabbau aus der Schicht schneiden (siehe TA_FREI).
+    {
+      const frei=tp.filter(t=>t&&terminArt(t)==='frei'&&(t.Mitarbeiter||[]).some(m=>String(m.Id)===id))
+        .map(t=>[new Date(t.Beginn),new Date(t.Ende)]).filter(([a,b])=>!isNaN(a)&&!isNaN(b)&&b>a);
+      if(frei.length){
+        schicht=rMinus(schicht,mergeR(frei));twm=rSum(schicht);
+        if(!schicht.length){absent.push({name:th.dn,reason:'Überstundenabbau'});return;}
+      }
+    }
     schicht.forEach(([s,e])=>{let c=s;am.forEach(([aS,aE])=>{if(aE<=s||aS>=e)return;const cs=new Date(Math.max(aS,s)),ce=new Date(Math.min(aE,e));if(cs>c){const g=(cs-c)/6e4;if(g>=MG){gaps.push({start:c,end:cs,min:g});gt+=g;}}c=new Date(Math.max(c,ce));});if(c<e){const g=(e-c)/6e4;if(g>=MG){gaps.push({start:c,end:e,min:g});gt+=g;}}});
 
     // String-Vergleich, nicht ===. `id` kommt aus Object.entries() und ist
@@ -3319,6 +3340,7 @@ function analyzeDay(tp,az){
     tp.forEach(t=>{
       if(!(t.Mitarbeiter||[]).some(m=>String(m.Id)===id))return;
       let ta=terminArt(t);const r=[new Date(t.Beginn),new Date(t.Ende)];
+      if(ta==='frei')return;                      // liegt außerhalb der Schicht
       // Ein leerer Gruppenblock steht nicht in den belegten Zeiten (siehe
       // oben) und ist damit eine Lücke; ein belegter zählt als Kurs.
       if(ta==='grp'){if(!grpBelegt(t,tp,id))return;ta='kurs';}
@@ -3845,15 +3867,17 @@ const MF_DIAG_RE=/diagnostik|befund/i;
 function mfPosten(beschr){
   let b=String(beschr||'').trim();const m=b.match(MF_STAND_RE);
   const stand=m?m[1].toLowerCase():'';if(m)b=b.slice(0,m.index);
-  const posten=b.split(/,\s*(?=\d+\s*x\s)/i).map(x=>{const q=x.match(/^\s*(\d+)\s*x\s*(.+?)\s*$/i);
+  const posten=b.split(/,\s*(?=\d+\s*x\s)/i).map(x=>{// Vorsatz erlaubt: „Unvollständig! – 2x Krankengymnastik"
+    const q=x.match(/(\d+)\s*x\s*(.+?)\s*$/i);
     return q?{n:+q[1],name:q[2]}:null;}).filter(Boolean);
   return{stand,posten};
 }
 // Wie im Verantwortlichen-Dashboard: Club, Kurse, T-RENA, Reha-Sport und
 // reine Diagnostik führt Medifox als "Verordnung" — Rezepte sind das nicht.
+const MF_KURS_RE=/pr[aä]vention|\bclub\b|r\s*\+\s*v\s*fit|t-?rena|reha-?sport|funktionstraining|trainingseinheit in der gruppe/i;
 function mfKeinRezept(beschr){
   const b=String(beschr||'');
-  if(/pr[aä]vention|\bclub\b|r\s*\+\s*v\s*fit|t-?rena|reha-?sport|funktionstraining|trainingseinheit in der gruppe/i.test(b))return true;
+  if(MF_KURS_RE.test(b))return true;
   const p=mfPosten(b).posten;return !p.length||p.every(x=>MF_DIAG_RE.test(x.name));
 }
 const MF_ABGESAGT=new Set([8,16,32]);
@@ -3892,7 +3916,8 @@ function mfHistorie(beh){
       if(!v||!v.Id||mfKeinRezept(v.Beschreibung))return;
       (v.Termine||[]).forEach(t=>{
         if(!t||!t.Datum)return;
-        const ab=MF_ABGESAGT.has(t.Status);
+        // Auch der Ausfall (16) verbraucht keine Einheit des Rezepts.
+        const ab=MF_ABGESAGT.has(t.Status)||t.Status===MF_AUSFALL;
         const mn=String(t.MitarbeiterName||'').trim(),i=mn.lastIndexOf(' ');
         out.push({VerordnungId:String(v.Id),PatientId:String(pid),Datum:t.Datum,
           Status:ab?'ABGESAGT':String(t.Status),
@@ -3913,6 +3938,63 @@ function mfDetails(beh){
       icd:String(v.ErsterIcd10||'').replace('.',''),icdT:'',dg:'',dgMax:0,fv:0,fb:0,ende:'',bvb:0,mf:1};
   }));
   return M;
+}
+
+// Ausfallrechnungen: Termine mit Status 16 an einem Rezept. Der Export sagt
+// nicht, ob die Rechnung schon gestellt ist — abgehakt wird in der Zeile, wie
+// bei den anderen offenen Rezepten. Gezeigt werden die letzten MF_AUSFALL_TAGE
+// Tage; ältere sind in aller Regel erledigt und blähten die Liste nur auf.
+const MF_AUSFALL_TAGE=90;
+// tpListen: Tages- und Wochenplan. behandlungen_alle.json kommt nachts — ein
+// Ausfall von heute steht nur im Plan, der stündlich kommt.
+function mfAusfaelle(beh,pl,standort,heuteDs,tpListen){
+  if(!Array.isArray(beh))beh=[];
+  const nm={};(Array.isArray(pl)?pl:[]).forEach(p=>{if(p&&p.Id)nm[String(p.Id)]=p;});
+  const heute=new Date(heuteDs+'T12:00:00'),out=[],gesehen=new Set();
+  beh.forEach(p=>{
+    const pid=p&&p.patientId;if(!pid)return;const pp=nm[String(pid)]||{};
+    ((p.data&&p.data.Verordnungen)||[]).forEach(v=>{
+      // Club, Kurse und T-RENA sind keine Heilmittel-Rezepte — dort gibt es
+      // keine Ausfallrechnung wie bei einer Verordnung.
+      if(!v||!v.Id||mfKeinRezept(v.Beschreibung))return;
+      const posten=mfPosten(v.Beschreibung).posten;
+      (v.Termine||[]).forEach(t=>{
+        if(!t||t.Status!==MF_AUSFALL||!t.Datum)return;
+        const ds=String(t.Datum).slice(0,10);
+        const tage=Math.round((heute-new Date(ds+'T12:00:00'))/864e5);
+        if(tage<0||tage>MF_AUSFALL_TAGE)return;
+        if(gesehen.has(v.Id+'|'+String(t.Datum).slice(0,16)))return;
+        gesehen.add(v.Id+'|'+String(t.Datum).slice(0,16));
+        out.push({id:'ausf|'+v.Id+'|'+t.Datum,
+          patient:((pp.Nachname||'')+(pp.Vorname?', '+pp.Vorname:'')).trim()||'(ohne Namen)',
+          pid:String(pid),standort,kat:'ausfall',
+          heilmittel:posten.map(x=>x.name).join(', '),formular:'',status:'',
+          offenImProgramm:false,ausst:String(v.Datum||'').slice(0,10)||null,
+          letzter:ds,naechster:null,nTermine:null,quelle:'termin',daysAgo:tage,
+          erb:0,gel:0,tv:null,tz:null,dokuLuecke:0,ueberhang:0,kann:0,rest:0,zz:0,
+          ausfallUhr:String(t.Datum).slice(11,16),ausfallBei:String(t.MitarbeiterName||'').trim()});
+      });
+    });
+  });
+  // Dazu, was nur im Plan steht. Derselbe Termin (Rezept + Beginn) zählt einmal.
+  (tpListen||[]).forEach(L=>(Array.isArray(L)?L.flat():[]).forEach(t=>{
+    if(!t||t.Status!==MF_AUSFALL||!t.PatientId||!t.Beginn)return;
+    // Im Plan steht nur das Heilmittel („MLD-30"), keine Menge — geprüft wird
+    // deshalb nur, ob es ein Kurs ist.
+    if(MF_KURS_RE.test(String(t.Bezeichnung||'')))return;
+    const ds=String(t.Beginn).slice(0,10),k=(t.VerordnungId||'p'+t.PatientId)+'|'+String(t.Beginn).slice(0,16);
+    if(gesehen.has(k))return;gesehen.add(k);
+    const tage=Math.round((heute-new Date(ds+'T12:00:00'))/864e5);
+    if(tage<0||tage>MF_AUSFALL_TAGE)return;
+    const m=(t.Mitarbeiter||[])[0]||{};
+    out.push({id:'ausf|'+(t.VerordnungId||'p'+t.PatientId)+'|'+t.Beginn,
+      patient:((t.PatientNachname||'')+(t.PatientVorname?', '+t.PatientVorname:'')).trim()||'(ohne Namen)',
+      pid:String(t.PatientId),standort,kat:'ausfall',heilmittel:String(t.Bezeichnung||''),formular:'',status:'',
+      offenImProgramm:false,ausst:null,letzter:ds,naechster:null,nTermine:null,quelle:'termin',daysAgo:tage,
+      erb:0,gel:0,tv:null,tz:null,dokuLuecke:0,ueberhang:0,kann:0,rest:0,zz:0,
+      ausfallUhr:String(t.Beginn).slice(11,16),ausfallBei:((m.Vorname||'')+' '+(m.Nachname||'')).replace(/\s*\(.*?\)\s*/g,' ').trim()});
+  }));
+  return out;
 }
 
 function histMap(roh,heuteDs){
@@ -4154,6 +4236,7 @@ const OFFEN_KAT={
   steck    :{l:'Steckengeblieben',         b:'b-amber',t:'Ein Teil der Einheiten ist terminlich durch, der Rest ist nicht terminiert — die Restmenge verfällt'},
   rgOffen  :{l:'Rechnung offen',           b:'b-amber',t:'Rechnung gestellt und noch nicht bezahlt'},
   zuzahlung:{l:'Zuzahlung fällig',         b:'b-teal', t:'Die verordnete Menge ist erbracht und es steht kein Termin mehr an — die Zuzahlung ist weder kassiert noch berechnet. Hier lässt sich kassieren.'},
+  ausfall  :{l:'Ausfallrechnung',b:'b-red',t:'Patient nicht erschienen (Medifox „Termin ausgefallen“) — Ausfallrechnung stellen. Ob sie schon gestellt ist, steht nicht im Export: abhaken, wenn erledigt.'},
   zuzahlungLaufend:{l:'Zuzahlung (laufend)',b:'b-teal',t:'Das Rezept läuft noch: Es steht ein Termin an oder die Menge ist nicht durch. Kassiert wird üblicherweise am Ende.'}
 };
 
@@ -5218,7 +5301,7 @@ function offenRows(){
   return offenTV.filter(r=>{
     if(offenKatFilter==='aktiv'&&r.kat==='zuzahlungLaufend')return false;   // Standard: laufende Zuzahlungen raus
     if(offenKatFilter!=='aktiv'&&offenKatFilter!=='all'&&r.kat!==offenKatFilter)return false;
-    if(offenWeeks&&(r.daysAgo==null||r.daysAgo<offenWeeks*7))return false;
+    if(offenWeeks&&r.kat!=='ausfall'&&(r.daysAgo==null||r.daysAgo<offenWeeks*7))return false;
     if(standortFilter!=='all'&&r.standort!==standortFilter)return false;
     if(s&&!r.patient.toLowerCase().includes(s)&&!String(r.heilmittel).toLowerCase().includes(s))return false;
     return true;
@@ -5231,7 +5314,7 @@ function offenRows(){
 function offenCount(kat){
   return offenTV.filter(r=>{
     if(kat==='aktiv'?r.kat==='zuzahlungLaufend':(kat!=='all'&&r.kat!==kat))return false;
-    if(offenWeeks&&(r.daysAgo==null||r.daysAgo<offenWeeks*7))return false;
+    if(offenWeeks&&r.kat!=='ausfall'&&(r.daysAgo==null||r.daysAgo<offenWeeks*7))return false;
     if(standortFilter!=='all'&&r.standort!==standortFilter)return false;
     return true;
   }).length;
@@ -5247,6 +5330,7 @@ function renderOffeneTV(el){
     +kb('aktiv','Handlungsbedarf')
     +kb('fertig','Fertig, nicht abgerechnet')
     +kb('steck','Steckengeblieben')
+    +(STANDORT==='kitzingen'?kb('ausfall','Ausfallrechnung'):'')
     +kb('rgOffen','Rechnung offen')
     +kb('zuzahlung','Zuzahlung')
     +kb('zuzahlungLaufend','Zuzahlung laufend')
@@ -5318,6 +5402,8 @@ function renderOffenTable(){
   if(sEl)sEl.innerHTML=
      `<div class="hk"><div class="hk-l">Fertig, nicht abgerechnet</div><div class="hk-v" style="color:${fert.length?'var(--red)':'var(--teal)'}">${fert.length}</div><div class="hk-sub">${ehFert} erbrachte Einheiten${blockiert?' · '+blockiert+'× noch nicht abgeschlossen':''}${nLuecke?' · '+nLuecke+'× Doku unvollständig':''}</div></div>`
     +`<div class="hk"><div class="hk-l">Steckengeblieben</div><div class="hk-v" style="color:${stk.length?'var(--amber)':'var(--teal)'}">${stk.length}</div><div class="hk-sub">${ehStk} Einheiten drohen zu verfallen</div></div>`
+    +(STANDORT==='kitzingen'?(()=>{const a=F.filter(r=>r.kat==='ausfall');
+      return `<div class="hk"><div class="hk-l">Ausfallrechnung</div><div class="hk-v" style="color:${a.length?'var(--red)':'var(--teal)'}">${a.length}</div><div class="hk-sub">nicht erschienen, letzte ${MF_AUSFALL_TAGE} Tage</div></div>`;})():'')
     +`<div class="hk"><div class="hk-l">Rechnung offen</div><div class="hk-v" style="color:${nRgO.length?'var(--amber)':'var(--teal)'}">${nRgO.length}</div><div class="hk-sub">gestellt, nicht bezahlt</div></div>`
     +`<div class="hk"><div class="hk-l">Zuzahlung offen</div><div class="hk-v" style="color:${zzSum>0?'var(--red)':'var(--teal)'}">${fm(zzSum)}</div><div class="hk-sub">${zzN} Rezepte</div></div>`;
 
@@ -5352,7 +5438,9 @@ function renderOffenTable(){
       +`<td><span class="standort ${sC(r.standort)}">${esc(r.standort)}</span></td>`
       +`<td class="r">${marke}${fd}</td>`
       +`<td class="r"><span class="days">${r.daysAgo!=null?r.daysAgo:'–'}</span></td>`
-      +`<td class="r"><strong${voll?' style="color:var(--red)"':''}>${r.gel}</strong><span style="color:var(--muted);font-size:10px"> / ${r.kann}</span>${luecke}</td>`
+      +(r.kat==='ausfall'
+        ?`<td class="r" style="font-size:11px;white-space:nowrap">${esc(r.ausfallUhr||'')} Uhr${r.ausfallBei?'<br><span style="color:var(--muted)">'+esc(r.ausfallBei)+'</span>':''}</td>`
+        :`<td class="r"><strong${voll?' style="color:var(--red)"':''}>${r.gel}</strong><span style="color:var(--muted);font-size:10px"> / ${r.kann}</span>${luecke}</td>`)
       +`<td class="r">${r.rest>0?'<strong style="color:var(--amber)">'+r.rest+'</strong>':'<span style="color:var(--muted)">–</span>'}</td>`
       +`<td class="r">${r.zz>0?'<strong>'+fm(r.zz)+'</strong>':'<span style="color:var(--muted)">–</span>'}</td>`
       +`<td class="rz-meta">${taskMeta(aufIdRezept(r),'abr',r.patient)}${notizZeile(aufIdRezept(r))}</td>`;

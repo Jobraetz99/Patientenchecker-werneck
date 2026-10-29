@@ -995,6 +995,7 @@ const STANDORTE={
           {id:'we',label:'Werneck Ergo',suf:'_we',filter:null,bereich:1}],
     dat:{pl:'patientenliste_werneck.json',beh:'behandlungen_werneck.json',ergo:'ergo_verordnungen_werneck.json',
          pat:'terminplan_14tage',hist:'auslastung_historie_werneck.json'},
+    kggUmnutzung:false,
     azRoh:true,extraTage:true,absagenRaus:false,telLoc:'alle',quelle:'patientenchecker-werneck'},
   // Medifox schreibt seine Exporte seit jeher nach 12_Code/Controlling, je
   // Filiale mit Endung (_f4 = PhFiP Kitzingen). Termin-Tagesdateien über
@@ -1014,6 +1015,9 @@ const STANDORTE={
     // Medifox liefert abgesagte Termine mit (Status 8, 16, 32). thevea nicht.
     // Eine Absage im Kalender ist keine Patientenzeit.
     // Arbeitszeiten liefert der Medifox-Flow fertig je Tag (arbeitszeiten_heute_f4).
+    // KGG-Block mit nur anderen Behandlungen (kein KGG-Termin darin) ist in
+    // Kitzingen ein umgenutzter Platz, kein fehlender KGG-Platz (29.10.2026).
+    kggUmnutzung:true,
     azRoh:false,extraTage:false,absagenRaus:true,telLoc:'Kitzingen',quelle:'patientenchecker-kitzingen'}
 };
 const ST=STANDORTE[STANDORT];
@@ -2923,8 +2927,8 @@ function renderDay(dd,day,locLabel){
     h+='</tbody></table>'
       +'<div style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.7">'
       +'<b>verplanbar</b> ist die Arbeitszeit ohne alles, was nicht zu vergeben war: '
-      +'<b>geblockt</b> (FL-Zeit, FL-Meeting, EAP-Zeit, Büro-Zeit, Weekly Club Meeting, Inno-Time, interne Fortbildung, Einarbeitung, eine in die Arbeitszeit verschobene Pause, ganztägige Blocker) '
-      +'und <b>reserviert</b> (kurze Blocker — für einen Dauerpatienten freigehaltene Plätze). '
+      +'<b>geblockt</b> (Blocker — bis 2 h je 40-h-Woche, FL-Zeit, FL-Meeting, EAP-Zeit, Büro-Zeit, Weekly Club Meeting, Inno-Time, interne Fortbildung, Einarbeitung, eine in die Arbeitszeit verschobene Pause, ganztägige Blocker) '
+      +'und <b>reserviert</b> (nur in Ständen vor dem 29.10.2026: kurze Blocker galten damals als freigehaltener Platz; seitdem zählt jeder „Blocker“ als geblockt). '
       +'<b>sonstiges</b> bleibt dagegen drin: Besprechungen, Planung und Einweisungen sind das, was '
       +'jemand in einer Lücke erledigt hat, weil kein Patient da war — die Zeit war zu vergeben, sie '
       +'wurde nur anders genutzt. <b>außer Haus</b> sind Hausbesuche und Heime: Patientenzeit, nur '
@@ -3032,8 +3036,12 @@ function pTime(ds,ts){const d=new Date(ds+'T'+ts);if(isNaN(d)){const p=ts.split(
 // gilt noch als Platz, ein Fünf-Stunden-Block nicht mehr.
 const TA_RES_MAX=90;
 const TA_BLK_NAME=/inno(?:vation)?[\s.-]*time|\bfl[\s.-]*zeit|interne\s*fobi|einarbeitung/i;
-// "Block" allein schreibt Kitzingen für dasselbe wie "Blocker".
-const TA_BLK_GEN=/blocker|geblock|^\W*block\W*$/i;
+// Hausregel (29.10.2026): Therapeuten dürfen bei 40 h Wochenarbeitszeit bis
+// zu 2 h Blocker planen. Diese Einträge heißen „Blocker" und sind NICHT
+// VERFÜGBAR — gleich wie lang. Was anders heißt („Block", „Geblockt" …), ist
+// anderweitig genutzt und zählt als verfügbare Zeit (fällt nach unten durch).
+// Die frühere Trennung nach Dauer (bis 90 min „reserviert") gilt nicht mehr.
+const TA_BLK_GEN=/(^|[^a-zäöüß])blocker([^a-zäöüß]|$)/i;
 const TA_AUS=/hausbesuch|altenheim|pflegeheim/i;
 const TA_KURS=/\bash\b|kimojo\s*club|r(?:ü|ue)ckenfit/i;
 // Der KGG-Gruppenblock. Er trägt in thevea Art 0 — ALLE 28 im 14-Tage-Fenster,
@@ -3204,12 +3212,26 @@ function grpBelegt(b,tp,mid){
     &&(t.Mitarbeiter||[]).some(m=>String(m.Id)===String(mid))
     &&new Date(t.Beginn)<bE&&new Date(t.Ende)>bS);
 }
+// KGG-Block umgenutzt? Es liegen Patienten darin, aber keiner mit KGG — dann
+// wurde der Platz für Einzeltermine verwendet (KG, MLD …). Nur Kitzingen: Dort
+// heißen KGG-Termine „Gerätegestützte Krankengymnastik"/„KG-Gerät". In
+// Werneck stehen die KGG-Patienten meist als „Blankoverordnung" im Block;
+// am Namen ließen sie sich dort nicht erkennen.
+const KGG_TERMIN_RE=/ger(ä|ae)tegest|kg-?ger(ä|ae)t|\bkgg\b/i;
+function kggUmgenutzt(b,tp,mid){
+  if(!ST.kggUmnutzung)return false;
+  const bS=new Date(b.Beginn),bE=new Date(b.Ende);
+  const drin=(tp||[]).filter(t=>t&&(t.PatientId||t.Art===1||t.Art===4)
+    &&(t.Mitarbeiter||[]).some(m=>String(m.Id)===String(mid))
+    &&new Date(t.Beginn)<bE&&new Date(t.Ende)>bS);
+  return drin.length>0&&!drin.some(t=>KGG_TERMIN_RE.test(String(t.Bezeichnung||'')));
+}
 function terminArt(t){
   const bz=String((t&&t.Bezeichnung)||'');
   if(TA_BLK_FEST.test(bz))return'blk';
   if(TA_ORGA.test(bz))return'son';
   if(TA_BLK_NAME.test(bz))return'blk';
-  if(TA_BLK_GEN.test(bz))return terminMin(t)<=TA_RES_MAX?'res':'blk';
+  if(TA_BLK_GEN.test(bz))return'blk';
   if(TA_AUS.test(bz))return'aus';
   if(TA_GRP.test(bz)&&!(t&&(t.PatientId||t.Art===1||t.Art===4)))return'grp';
   if(TA_KURS.test(bz))return'kurs';
@@ -3232,7 +3254,7 @@ function analyzeDay(tp,az){
   }
   const azById={};if(azValid)azValid.forEach(a=>{azById[a.Id]={az:a.Arbeitszeiten||[],absent:a.IstAbwesend,label:a.Abwesenheitsbezeichnung};});
   const IGNORE=['Christine Franz'];
-  const T={};tp.forEach(t=>{(t.Mitarbeiter||[]).forEach(m=>{const id=m.Id,vn=(m.Vorname||'').trim(),nn=(m.Nachname||'').trim();if(istKeinTherapeut(m))return;if(!vn)return;if(INAKTIVE_MA.has(String(id)))return;if(TEAM_IDS.size&&!TEAM_IDS.has(String(id)))return;if(IGNORE.some(n=>n.toLowerCase()===(vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim()).toLowerCase()))return;if(!T[id])T[id]={vn,nn,dn:vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim(),ar:[],pz:[],pc:0};if(!(terminArt(t)==='grp'&&!grpBelegt(t,tp,id)))T[id].ar.push([new Date(t.Beginn),new Date(t.Ende)]);
+  const T={};tp.forEach(t=>{(t.Mitarbeiter||[]).forEach(m=>{const id=m.Id,vn=(m.Vorname||'').trim(),nn=(m.Nachname||'').trim();if(istKeinTherapeut(m))return;if(!vn)return;if(INAKTIVE_MA.has(String(id)))return;if(TEAM_IDS.size&&!TEAM_IDS.has(String(id)))return;if(IGNORE.some(n=>n.toLowerCase()===(vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim()).toLowerCase()))return;if(!T[id])T[id]={vn,nn,dn:vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim(),ar:[],pz:[],pc:0};{const ta0=terminArt(t);if(!(ta0==='grp'&&!grpBelegt(t,tp,id))&&!(ta0==='kgg'&&kggUmgenutzt(t,tp,id)))T[id].ar.push([new Date(t.Beginn),new Date(t.Ende)]);}
     // Patientenzeit getrennt mitführen: Nur sie darf die Schicht verlängern.
     const ta=terminArt(t);
     if(ta==='pat'||ta==='kurs'||ta==='aus')T[id].pz.push([new Date(t.Beginn),new Date(t.Ende)]);
@@ -3300,6 +3322,8 @@ function analyzeDay(tp,az){
       // Ein leerer Gruppenblock steht nicht in den belegten Zeiten (siehe
       // oben) und ist damit eine Lücke; ein belegter zählt als Kurs.
       if(ta==='grp'){if(!grpBelegt(t,tp,id))return;ta='kurs';}
+      // Umgenutzter KGG-Block: Es zählen nur die eingebuchten Termine selbst.
+      if(ta==='kgg'&&kggUmgenutzt(t,tp,id))return;
       topf[ta].push(r);
       if(ta==='son')sonTxt.push([r[0],r[1],
         String(t.Bezeichnung||'').trim().replace(/\s+/g,' ').slice(0,60)||'(ohne Bezeichnung)']);

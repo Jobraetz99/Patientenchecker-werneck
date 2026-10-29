@@ -915,13 +915,18 @@ body{
 .ts.sps{background:repeating-linear-gradient(45deg,#DEDEE3,#DEDEE3 3px,#D0D0D6 3px,#D0D0D6 6px)}
 .ts.so{background:#E4E4E9}
 
+.ort-wahl{display:inline-flex;gap:2px;background:var(--sunken);border:1px solid var(--border);border-radius:8px;padding:2px;margin-right:4px}
+.ort-l{padding:4px 11px;border-radius:6px;font-size:12.5px;font-weight:550;color:var(--muted);text-decoration:none}
+.ort-l:hover{color:var(--dark)}
+.ort-l.a{background:var(--card);color:var(--primary);font-weight:600;box-shadow:0 1px 2px rgba(17,17,20,.08)}
+.kz-fehlt{background:var(--amber-bg);color:var(--amber);border:1px solid #EFE3C8;border-radius:10px;padding:14px 16px;font-size:13.5px;line-height:1.55;margin:8px 0 18px}
 </style>
 </head>
 <body>
 <div id="lo"><div class="lb"><h1>Praxismanagement</h1><p>KIMOJO Werneck · To-Do's & Controlling</p><button class="l-btn" onclick="signIn()"><svg viewBox="0 0 21 21" width="20" height="20"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>Mit Microsoft anmelden</button><div class="l-err" id="er"></div></div></div>
 <div class="loading h" id="ld"><div class="spinner"></div><p id="lt">Lade...</p></div>
 <div id="db"><div class="mx">
-<div id="ladeBanner"></div><div class="hdr"><h1>☀️ <span>Praxis</span><span class="acc">management</span> Werneck</h1><div class="hdr-r"><span class="demo-badge">🏥 KIMOJO WERNECK</span><span id="bld" style="font-size:10px;color:var(--muted)" title="Fassung dieser Seite"></span><span id="lastUp" style="font-size:11px;color:var(--muted)"></span><button class="hdr-btn" onclick="loadAll()">↻ Neu laden</button><button class="hdr-btn" onclick="signOut()">Abmelden</button></div></div>
+<div id="ladeBanner"></div><div class="hdr"><h1>☀️ <span>Praxis</span><span class="acc">management</span> <span id="hdrOrt">Werneck</span></h1><div class="hdr-r"><span id="ortWahl" class="ort-wahl"></span><span class="demo-badge" id="hdrBadge">🏥 KIMOJO WERNECK</span><span id="bld" style="font-size:10px;color:var(--muted)" title="Fassung dieser Seite"></span><span id="lastUp" style="font-size:11px;color:var(--muted)"></span><button class="hdr-btn" onclick="loadAll()">↻ Neu laden</button><button class="hdr-btn" onclick="signOut()">Abmelden</button></div></div>
 <div class="main-tabs" id="mainTabs"></div>
 <div id="mc"></div>
 </div></div>
@@ -970,7 +975,62 @@ ma.initialize().then(async()=>{
 const SITES={kimojo:{host:'kimojophysiotherapie.sharepoint.com',path:'/sites/KIMOJOManagement'}};
 // WERNECK: eigener Exportordner, damit die Kitzinger Medifox-JSONs (BASE '/12_Code/Controlling/'
 // in der index.html) unberührt bleiben. Pfad ist relativ zur Bibliothek "Freigegebene Dokumente".
-const SP='/sites/KIMOJOManagement',BASE='/12_Code/Patientenchecker/Dateien Export/';
+// ── STANDORT ─────────────────────────────────────────────────────────────
+// Ein Patientenchecker für beide Häuser. Welches, steht im Link:
+//   …/?standort=kitzingen   PhFiP Kitzingen (Medifox)
+//   ohne Angabe             KIMOJO Werneck (thevea) — wie bisher
+// Gewechselt wird per Neuladen, nicht im laufenden Betrieb: Jeder Standort hat
+// eigene Dateien, eigene Teams und eigene Zwischenstände, und ein halb
+// umgeschalteter Zustand wäre die schwerste Fehlerquelle von allen.
+//
+// Gelesen wird aus dem Exportordner des Standorts, GESCHRIEBEN (Kennzahlen,
+// Aufgabenprotokoll) in getrennte Ordner. Sonst überschrieben sich Werneck und
+// Kitzingen gegenseitig, sobald beide gleichzeitig offen haben.
+const STANDORT=(()=>{try{return /^kitz/i.test(new URLSearchParams(location.search).get('standort')||'')?'kitzingen':'werneck';}catch(e){return 'werneck';}})();
+const STANDORTE={
+  werneck:{name:'Werneck',badge:'🏥 KIMOJO WERNECK',
+    base:'/12_Code/Patientenchecker/Dateien Export/',
+    ablage:'/12_Code/Patientenchecker/Dateien Export/',
+    locs:[{id:'wp',label:'Werneck Physio',suf:'_wp',filter:null,bereich:4},
+          {id:'we',label:'Werneck Ergo',suf:'_we',filter:null,bereich:1}],
+    dat:{pl:'patientenliste_werneck.json',beh:'behandlungen_werneck.json',ergo:'ergo_verordnungen_werneck.json',
+         pat:'terminplan_14tage',hist:'auslastung_historie_werneck.json'},
+    azRoh:true,extraTage:true,absagenRaus:false,telLoc:'alle',quelle:'patientenchecker-werneck'},
+  // Medifox schreibt seine Exporte seit jeher nach 12_Code/Controlling, je
+  // Filiale mit Endung (_f4 = PhFiP Kitzingen). Termin-Tagesdateien über
+  // morgen hinaus gibt es dort nicht; die laufende Woche steht in
+  // terminplan_woche_f4.json, die Patienten der nächsten Tage in
+  // terminplan_7tage_f4.json.
+  kitzingen:{name:'Kitzingen',badge:'🏥 PHFIP KITZINGEN',
+    base:'/12_Code/Controlling/',
+    ablage:'/12_Code/Patientenchecker/Dateien Export Kitzingen/',
+    locs:[{id:'kz',label:'Kitzingen',suf:'_f4',filter:null,bereich:4}],
+    dat:{pl:'patientenliste.json',beh:'behandlungen_alle.json',ergo:'ergo_verordnungen_detail.json',
+         pat:'terminplan_7tage',hist:null},
+    // Medifox liefert abgesagte Termine mit (Status 8, 16, 32). thevea nicht.
+    // Eine Absage im Kalender ist keine Patientenzeit.
+    // Arbeitszeiten liefert der Medifox-Flow fertig je Tag (arbeitszeiten_heute_f4).
+    azRoh:false,extraTage:false,absagenRaus:true,telLoc:'Kitzingen',quelle:'patientenchecker-kitzingen'}
+};
+const ST=STANDORTE[STANDORT];
+// Kopf: Name, Kennung und die Umschaltung. Ein Link je Haus, damit jedes Team
+// sein eigenes Lesezeichen hat.
+try{
+  document.title='Praxismanagement · '+(STANDORT==='kitzingen'?'PhFiP Kitzingen':'KIMOJO Werneck');
+  document.getElementById('hdrOrt').textContent=ST.name;
+  document.getElementById('hdrBadge').textContent=ST.badge;
+  document.getElementById('ortWahl').innerHTML=Object.keys(STANDORTE).map(k=>
+    '<a class="ort-l'+(k===STANDORT?' a':'')+'" href="'+location.pathname+(k==='werneck'?'':'?standort='+k)+'">'
+    +STANDORTE[k].name+'</a>').join('');
+}catch(e){}
+const SP='/sites/KIMOJOManagement',BASE=ST.base;
+// Abgesagt in Medifox: 8, 16, 32. Geplant 1, erbracht 4, 2 in Bearbeitung.
+const MF_ABSAGE=new Set([8,16,32]);
+function ohneAbsagen(tp){
+  if(!ST.absagenRaus||!Array.isArray(tp))return tp;
+  const raus=t=>t&&!Array.isArray(t)&&MF_ABSAGE.has(t.Status);
+  return tp.map(x=>Array.isArray(x)?x.filter(t=>!raus(t)):x).filter(x=>!raus(x));
+}
 // Blanko-Obergrenzen (grüne Phase) je ICD: Weichteil (M-Codes) = 18 vorrangig + 6 ergänzend;
 // Fraktur/Luxation (S42/S43) = 26 vorrangig + 8 ergänzend. Bei Bedarf hier anpassen (z.B. fxErg:9).
 const BLANKO_MAX={wtVor:18,wtErg:6,fxVor:26,fxErg:8};
@@ -986,10 +1046,7 @@ const MG=20;
 // WERNECK: zwei thevea-Zugänge (Physio und Ergo als getrennte Accounts).
 // Jeder Account liefert seinen eigenen JSON-Satz, deshalb kein 'filter' nötig —
 // die Trennung passiert schon beim Export in Power Automate.
-const LOCS=[
-  {id:'wp',label:'Werneck Physio',suf:'_wp',filter:null,bereich:4},
-  {id:'we',label:'Werneck Ergo',suf:'_we',filter:null,bereich:1}
-];
+const LOCS=ST.locs;
 // Mitarbeiter-IDs, die dauerhaft nie angezeigt werden sollen (Handbetrieb, Notnagel).
 // Leer lassen = automatische Team-Erkennung (TEAM_IDS) entscheidet. IDs = personId aus thevea.
 const INAKTIVE_MA=new Set([]);
@@ -1112,7 +1169,7 @@ const DATA={};let behData=null,plData=null,ergoDetailData=null,RCS={},RC=null;
 // Hausbesuch-Sets: aus dem Terminplan-Export (DATA) gespeist. Hausbesuch ist bei KIMOJO
 // am EINZELNEN Termin hinterlegt (Feld IsHausbesuch), nicht an der Verordnung in behData.
 let HB_VO=new Set(),HB_PAT=new Set();
-let driveId=null,drives={},curLoc='wp',curSub='heute',curView='luecken',curLocIntern='wp',internKW=0;
+let driveId=null,drives={},curLoc=LOCS[0].id,curSub='heute',curView='luecken',curLocIntern=LOCS[0].id,internKW=0;
 let overduePatients=[],currentSort={col:'daysAgo',asc:false},minWeeks=2,standortFilter='all';
 // thevea-Variante des Reiters "Offene Rezepte": je Rezept eine Zeile mit Abrechnungsstand.
 let offenTV=[],offenKatFilter='aktiv',offenWeeks=2;
@@ -1129,7 +1186,7 @@ let histKWs=null,histSelKW=null,histRaw=null,histSelDay=null;
 // telEbene ist KEINE Einstellung mehr, sondern ein Ergebnis: telReihe() setzt es
 // auf 'woche', wenn ein freier Zeitraum zu lang für Tagesbalken wird.
 // telWoche ist ein beliebiger Tag der gezeigten Woche, nicht zwingend der Montag.
-let telData=null,telLoc='alle',telEbene='tag',telSel=null;
+let telData=null,telLoc=ST.telLoc,telEbene='tag',telSel=null;
 let telModus='heute',telWoche=null,telVon='',telBis='';
 // Die geladenen Roh-Legs und die Monate, die schon versucht wurden. Ein Monat
 // ohne Datei wird trotzdem vermerkt, sonst fragt jeder Pfeilklick erneut nach.
@@ -1140,7 +1197,7 @@ let telTrendKorn='woche',telTrendSpanne=26,telTrendTaste='alle';
 const statusMap=JSON.parse(localStorage.getItem('rezeptStatus')||'{}');
 let wlData=[],wlView='all',wlStatusFilter='all';
 // Rezept-Ende-Tab (Therapiemanagement): Patienten mit letztem/vorletztem Rezept-Termin heute/morgen
-let reLoc='wp',reSub='heute',reTherapeut='all';
+let reLoc=LOCS[0].id,reSub='heute',reTherapeut='all';
 // ── PORTIERUNG CKI ──────────────────────────────────────────────────────────
 // Die neuen Reiter (Tagesziel, Folge-VO, Potential-Dauer, Rezepte, Verlauf) greifen
 // auf dieselben Rohdaten zu, die loadAll ohnehin lädt — bisher lagen die aber nur
@@ -1150,13 +1207,13 @@ let reLoc='wp',reSub='heute',reTherapeut='all';
 //   det  = detMap() der Verordnungsdetails (ICD, Diagnosegruppe, Frequenz)
 //   hist = histMap() der Termin-Historie (letzter/nächster Termin je Rezept)
 let VOD={};
-let tzLoc=lsGet('kimojo_tzloc','wp'),tzDay=null,tzOnlyMine=false;
+let tzLoc=lsGet('kimojo_tzloc',LOCS[0].id),tzDay=null,tzOnlyMine=false;
 // Ansicht und Bereich ueberleben den Reload. Wer im Backoffice sitzt, will dort
 // landen und nicht jeden Morgen zweimal klicken. Geschrieben wird nur ueber
 // setTzMode/setTzArea, die beide normalisieren — deshalb darf hier roh gelesen
 // werden, ohne die Werte noch einmal zu pruefen.
 let tzMode=lsGet('kimojo_tzmode','liste'),tzArea=lsGet('kimojo_tzarea','alle');
-let fvLoc='wp',fvSuche='',pdLoc='wp',rzLoc='wp',rzSuche='',rzStatus='all',rzSub='handeln',pdFilter='all';
+let fvLoc=LOCS[0].id,fvSuche='',pdLoc=LOCS[0].id,rzLoc=LOCS[0].id,rzSuche='',rzStatus='all',rzSub='handeln',pdFilter='all';
 
 // ═══════════════════════════════════════════════════════════
 // HELPERS
@@ -1480,12 +1537,12 @@ async function loadAll(){
     for(const suf of suffixes){
       lt.textContent='Lade Terminplan'+suf+'...';
       DATA[suf]={heute:{tp:null,az:null},morgen:{tp:null,az:null},woche:{tp:null},extraDays:[]};
-      DATA[suf].heute.tp=await loadJSON('terminplan_heute'+suf+'.json');
-      DATA[suf].morgen.tp=await loadJSON('terminplan_morgen'+suf+'.json');
+      DATA[suf].heute.tp=ohneAbsagen(await loadJSON('terminplan_heute'+suf+'.json'));
+      DATA[suf].morgen.tp=ohneAbsagen(await loadJSON('terminplan_morgen'+suf+'.json'));
       // Arbeitszeiten: bevorzugt aus den thevea-Rohdaten rechnen (siehe buildAZ oben).
       // Fallback auf fertige Tagesdateien, falls der Flow sie doch einmal liefert.
-      const azRoh=await loadJSON('arbeitszeiten_roh'+suf+'.json');
-      const abwRoh=await loadJSON('abwesenheiten_roh'+suf+'.json');
+      const azRoh=ST.azRoh?await loadJSON('arbeitszeiten_roh'+suf+'.json'):null;
+      const abwRoh=ST.azRoh?await loadJSON('abwesenheiten_roh'+suf+'.json'):null;
       if(Array.isArray(azRoh)){
         DATA[suf].heute.az=buildAZ(azRoh,abwRoh,isoDay(0));
         DATA[suf].morgen.az=buildAZ(azRoh,abwRoh,isoDay(1));
@@ -1493,11 +1550,11 @@ async function loadAll(){
         DATA[suf].heute.az=await loadJSON('arbeitszeiten_heute'+suf+'.json',true);
         DATA[suf].morgen.az=await loadJSON('arbeitszeiten_morgen'+suf+'.json',true);
       }
-      try{DATA[suf].woche.tp=await loadJSON('terminplan_woche'+suf+'.json',true);}catch(e){DATA[suf].woche.tp=null;} // optional: Wochenübersicht (1 Datei)
+      try{DATA[suf].woche.tp=ohneAbsagen(await loadJSON('terminplan_woche'+suf+'.json',true));}catch(e){DATA[suf].woche.tp=null;} // optional: Wochenübersicht (1 Datei)
       // Tagesdateien Tag +2..+13. thevea liefert 14 Tage in einem Rutsch (ein getTermine-Call,
       // ca. 0,8 MB / 2 s), der Flow zerlegt das Ergebnis in Tagesdateien. Dadurch ist die
       // Wochenübersicht zwei Wochen weit sichtbar und "Termine ohne Rezept" greift früh genug.
-      try{const extra=await Promise.all(EXTRA_DAYS.map(n=>loadJSON('terminplan_t'+n+suf+'.json',true)));DATA[suf].extraDays=extra.filter(Boolean);}catch(e){DATA[suf].extraDays=[];}
+      try{const extra=ST.extraTage?await Promise.all(EXTRA_DAYS.map(n=>loadJSON('terminplan_t'+n+suf+'.json',true))):[];DATA[suf].extraDays=extra.filter(Boolean).map(ohneAbsagen);}catch(e){DATA[suf].extraDays=[];}
       // "Morgen" ist freitags der Samstag und samstags der Sonntag — beides leere Dateien.
       // Der Reiter heißt dann laut getMorgenLabel() zwar schon "Montag", zeigte aber die
       // leere Samstagsdatei. Deshalb rückt er hier auf den ersten Tag mit Terminen vor.
@@ -1514,9 +1571,9 @@ async function loadAll(){
 
     lt.textContent='Lade Rezeptdaten...';
     // Werneck: beide thevea-Accounts schreiben in je eine Datei, der Flow führt sie zusammen.
-    plData=await loadJSON('patientenliste_werneck.json',true);
-    behData=await loadJSON('behandlungen_werneck.json',true);
-    ergoDetailData=await loadJSON('ergo_verordnungen_werneck.json',true);
+    plData=await loadJSON(ST.dat.pl,true);
+    behData=await loadJSON(ST.dat.beh,true);
+    ergoDetailData=await loadJSON(ST.dat.ergo,true);
     await loadNrNotes();
 
     // PAT_IDS — je Standort die Patienten der nächsten 14 Tage
@@ -1524,7 +1581,7 @@ async function loadAll(){
     const PAT_IDS={};
     function extractPids(data){const ids=new Set();if(!data||!Array.isArray(data))return ids;data.forEach(id=>{if(id)ids.add(id);});return ids;}
     for(const loc of LOCS){
-      const tp14=await loadJSON('terminplan_14tage'+loc.suf+'.json');
+      const tp14=await loadJSON(ST.dat.pat+loc.suf+'.json');
       PAT_IDS[loc.id]=extractPids(tp14);
     }
     window._PAT_IDS=PAT_IDS;
@@ -1637,7 +1694,7 @@ async function loadAll(){
     // Solange die Datei fehlt, bleibt der Historie-Block einfach leer.
     try{
       lt.textContent='Lade Auslastungs-Historie...';
-      histRaw=await loadJSON('auslastung_historie_werneck.json',true);
+      histRaw=ST.dat.hist?await loadJSON(ST.dat.hist,true):null;
       if(histRaw)histKWs=hProKW(histRaw,{},()=>'physio');
     }catch(e){console.warn('Historie:',e);}
 
@@ -2101,13 +2158,21 @@ function renderControlling(){
   let h='';
   h+='<div class="summary"><h2>📊 Controlling · Auslastung und Therapeuten</h2>'
     +'<div class="tz-lead">Wie voll die Woche ist, wie sie sich über die Zeit entwickelt, was intern läuft und wer '
-    +'welche Auslastung fährt. Zahlen kommen live aus thevea.</div></div>';
+    +'welche Auslastung fährt. Zahlen kommen live aus '+(STANDORT==='kitzingen'?'Medifox':'thevea')+'.</div></div>';
+  if(STANDORT==='kitzingen'){
+    // KW-Übersicht und Historie stammen in Werneck aus dem KPI-Tracker und dem
+    // thevea-Historienexport. Für Kitzingen ist keins von beiden angebunden;
+    // „Keine Daten" unter Werneck-Namen hielte man für einen Fehler.
+    h+='<div class="kz-fehlt">Die <b>Auslastung je Kalenderwoche</b> und ihre <b>Historie</b> sind für Kitzingen noch nicht angeschlossen. '
+      +'Die Auslastung des Tages steht im Reiter „Lücken“.</div>';
+  }else{
   h+='<div class="st">📊 Auslastung (KW-Übersicht)</div>';
   h+='<div class="kw-nav"><button class="kw-btn" onclick="changeKW(-1)">←</button><h3 id="kwTitle">KW '+selectedKW+'</h3><button class="kw-btn" onclick="changeKW(1)">→</button><span class="kw-info" id="kwMonth"></span></div>';
   h+='<div class="ausl-grid" id="auslDiv"></div>';
   // Auslastungs-Historie (dynamisch aus thevea) — Werneck
-  h+='<div class="st">📈 Auslastung Historie · Werneck (live)</div>';
+  h+='<div class="st">📈 Auslastung Historie · '+ST.name+' (live)</div>';
   h+='<div id="histDiv"></div>';
+  }
   // Wochenübersicht interne Termine (KGG / Blanko / Prävention / Hausbesuch)
   h+='<div class="st">📅 Interne Termine · Woche (KGG / Blanko / Prävention / Hausbesuch)</div>';
   h+='<div class="tabs" id="locTabsIntern"></div>';
@@ -2936,8 +3001,9 @@ function pTime(ds,ts){const d=new Date(ds+'T'+ts);if(isNaN(d)){const p=ts.split(
 // von 90 Minuten hat auf beiden Seiten Luft: Ein Doppeltermin von 60 Minuten
 // gilt noch als Platz, ein Fünf-Stunden-Block nicht mehr.
 const TA_RES_MAX=90;
-const TA_BLK_NAME=/inno-?\s*time|\bfl[\s.-]*zeit|interne\s*fobi|einarbeitung/i;
-const TA_BLK_GEN=/blocker|geblock/i;
+const TA_BLK_NAME=/inno(?:vation)?[\s.-]*time|\bfl[\s.-]*zeit|interne\s*fobi|einarbeitung/i;
+// "Block" allein schreibt Kitzingen für dasselbe wie "Blocker".
+const TA_BLK_GEN=/blocker|geblock|^\W*block\W*$/i;
 const TA_AUS=/hausbesuch|altenheim|pflegeheim/i;
 const TA_KURS=/\bash\b|kimojo\s*club|r(?:ü|ue)ckenfit/i;
 // Der KGG-Gruppenblock. Er trägt in thevea Art 0 — ALLE 28 im 14-Tage-Fenster,
@@ -3090,7 +3156,24 @@ const TA_ORGA=/\bplanung\b|vorbereit|\bmeeting\b|besprech/i;
 // Stunde, die am Patienten gearbeitet wurde. Als nicht verfügbar gleicht sie
 // das aus. Eine Pause an ihrer regulären Stelle liegt ausserhalb der Schicht
 // und zählt ohnehin nicht (clip schneidet auf die Schicht zu).
-const TA_BLK_FEST=/\beap\b|\bfl[\s.-]*meeting|b(?:ü|ue|u)ro[\s.-]*zeit|weekly\s*club\s*meeting|pausen?\b/i;
+// Kitzingen (Medifox) dazu: Officezeit, Orgatime, Blogger, Theken Meeting —
+// festgelegt am 29.10.2026. "Orga" allein zählt nicht dazu.
+const TA_BLK_FEST=/\beap\b|\bfl[\s.-]*meeting|b(?:ü|ue|u)ro[\s.-]*zeit|weekly\s*club\s*meeting|pausen?\b|office[\s.-]*zeit|orga[\s.-]*time|blogger|theken[\s.-]*meeting/i;
+// Gruppenblock: Prävention. Die Teilnehmer stehen als eigene Patiententermine
+// im Block („Kraft-Präventionskurs", „PhFiP Club 1"); in Kitzingen 30 von 33
+// Blöcken der Woche. Steht jemand darin, ist die Zeit über diese Termine
+// Patientenzeit und der Block zählt als Kurs. Ist der Block leer, ist er eine
+// Lücke — der Platz war zu vergeben (Regel vom 29.10.2026).
+const TA_GRP=/pr(?:ä|ae)vention/i;
+// Steht im Gruppenblock jemand? Ein Patiententermin desselben Therapeuten, der
+// sich mit dem Block überschneidet. Verglichen wird als Text — thevea liefert
+// Ids als Zahl, Object.entries() als Text.
+function grpBelegt(b,tp,mid){
+  const bS=new Date(b.Beginn),bE=new Date(b.Ende);
+  return (tp||[]).some(t=>t&&(t.PatientId||t.Art===1||t.Art===4)
+    &&(t.Mitarbeiter||[]).some(m=>String(m.Id)===String(mid))
+    &&new Date(t.Beginn)<bE&&new Date(t.Ende)>bS);
+}
 function terminArt(t){
   const bz=String((t&&t.Bezeichnung)||'');
   if(TA_BLK_FEST.test(bz))return'blk';
@@ -3098,6 +3181,7 @@ function terminArt(t){
   if(TA_BLK_NAME.test(bz))return'blk';
   if(TA_BLK_GEN.test(bz))return terminMin(t)<=TA_RES_MAX?'res':'blk';
   if(TA_AUS.test(bz))return'aus';
+  if(TA_GRP.test(bz)&&!(t&&(t.PatientId||t.Art===1||t.Art===4)))return'grp';
   if(TA_KURS.test(bz))return'kurs';
   if(t&&(t.PatientId||t.Art===1||t.Art===4))return'pat';
   // Erst nach dem Patientencheck: Ein Termin, der KGG heißt und einen Patienten
@@ -3118,7 +3202,7 @@ function analyzeDay(tp,az){
   }
   const azById={};if(azValid)azValid.forEach(a=>{azById[a.Id]={az:a.Arbeitszeiten||[],absent:a.IstAbwesend,label:a.Abwesenheitsbezeichnung};});
   const IGNORE=['Christine Franz'];
-  const T={};tp.forEach(t=>{(t.Mitarbeiter||[]).forEach(m=>{const id=m.Id,vn=(m.Vorname||'').trim(),nn=(m.Nachname||'').trim();if(istKeinTherapeut(m))return;if(!vn)return;if(INAKTIVE_MA.has(String(id)))return;if(TEAM_IDS.size&&!TEAM_IDS.has(String(id)))return;if(IGNORE.some(n=>n.toLowerCase()===(vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim()).toLowerCase()))return;if(!T[id])T[id]={vn,nn,dn:vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim(),ar:[],pz:[],pc:0};T[id].ar.push([new Date(t.Beginn),new Date(t.Ende)]);
+  const T={};tp.forEach(t=>{(t.Mitarbeiter||[]).forEach(m=>{const id=m.Id,vn=(m.Vorname||'').trim(),nn=(m.Nachname||'').trim();if(istKeinTherapeut(m))return;if(!vn)return;if(INAKTIVE_MA.has(String(id)))return;if(TEAM_IDS.size&&!TEAM_IDS.has(String(id)))return;if(IGNORE.some(n=>n.toLowerCase()===(vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim()).toLowerCase()))return;if(!T[id])T[id]={vn,nn,dn:vn+' '+nn.replace(/\s*\(.*?\)\s*/g,'').trim(),ar:[],pz:[],pc:0};if(!(terminArt(t)==='grp'&&!grpBelegt(t,tp,id)))T[id].ar.push([new Date(t.Beginn),new Date(t.Ende)]);
     // Patientenzeit getrennt mitführen: Nur sie darf die Schicht verlängern.
     const ta=terminArt(t);
     if(ta==='pat'||ta==='kurs'||ta==='aus')T[id].pz.push([new Date(t.Beginn),new Date(t.Ende)]);
@@ -3182,7 +3266,10 @@ function analyzeDay(tp,az){
     const sonTxt=[],ausTxt=[];
     tp.forEach(t=>{
       if(!(t.Mitarbeiter||[]).some(m=>String(m.Id)===id))return;
-      const ta=terminArt(t),r=[new Date(t.Beginn),new Date(t.Ende)];
+      let ta=terminArt(t);const r=[new Date(t.Beginn),new Date(t.Ende)];
+      // Ein leerer Gruppenblock steht nicht in den belegten Zeiten (siehe
+      // oben) und ist damit eine Lücke; ein belegter zählt als Kurs.
+      if(ta==='grp'){if(!grpBelegt(t,tp,id))return;ta='kurs';}
       topf[ta].push(r);
       if(ta==='son')sonTxt.push([r[0],r[1],
         String(t.Bezeichnung||'').trim().replace(/\s+/g,' ').slice(0,60)||'(ohne Bezeichnung)']);
@@ -5245,8 +5332,12 @@ function renderWL(){
 // Verlauf. Das Prefix trennt Werneck sauber vom Kitzinger Dashboard (cki_).
 // ═══════════════════════════════════════════════════════════════════════════
 
-function lsGet(key,fallback){try{const v=localStorage.getItem(key);return v===null?fallback:JSON.parse(v);}catch(e){return fallback;}}
-function lsSet(key,val){try{localStorage.setItem(key,JSON.stringify(val));}catch(e){}}
+// Kitzingen bekommt eigene Schlüssel (kimojo_kz_…): Haken, Notizen und die
+// gemerkte Ansicht des einen Hauses dürfen im anderen nicht auftauchen. Werneck
+// behält seine Schlüssel unverändert.
+function lsKey(key){return STANDORT==='kitzingen'?String(key).replace(/^kimojo_/,'kimojo_kz_'):key;}
+function lsGet(key,fallback){try{const v=localStorage.getItem(lsKey(key));return v===null?fallback:JSON.parse(v);}catch(e){return fallback;}}
+function lsSet(key,val){try{localStorage.setItem(lsKey(key),JSON.stringify(val));}catch(e){}}
 // Für onclick-Attribute: ein Apostroph im Namen zerlegt sonst den Handler.
 function jsq(s){return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
 function hhmm(d){return d instanceof Date&&!isNaN(d)?d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'';}
@@ -5273,7 +5364,7 @@ function hhmm(d){return d instanceof Date&&!isNaN(d)?d.toLocaleTimeString('de-DE
 //   Als Notbetrieb. Ist SharePoint nicht erreichbar oder die Anmeldung
 //   abgelaufen, muss ein Haken am Empfang weiter funktionieren. Er ist dann
 //   nur lokal — und die Teamleiste sagt das auch.
-const AUF_DIR='/12_Code/Patientenchecker/Dateien Export/aufgaben/';
+const AUF_DIR=ST.ablage+'aufgaben/';
 const AUF_V=1;
 const AUF_TEAM_DATEI=AUF_DIR+'team.json';
 const AUF_GUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -5763,7 +5854,7 @@ async function aufStart(){
 // holt sie wieder, weil die Telefoniezahlen des ganzen Monats jedes Mal neu
 // gerechnet werden.
 // ═══════════════════════════════════════════════════════════════════════════
-const KENN_DIR='/12_Code/Patientenchecker/Dateien Export/kennzahlen/';
+const KENN_DIR=ST.ablage+'kennzahlen/';
 // 2: Auslastung je Therapeut, getrennte Zeittöpfe, bereinigte Quote.
 // 3: Tagespensum statt Momentaufnahme bei den Aufgaben.
 // 4: Das Pensum merkt sich auch den Bereich, nicht nur die Kategorie.
@@ -6361,7 +6452,7 @@ function kennBau(vorhanden){
   Object.keys(proTag).forEach(k=>{
     if(k!==datenTag&&proTag[k]&&proTag[k].auf)delete proTag[k].auf.pensum;
   });
-  return{v:KENN_V,monat,stand:Date.now(),quelle:'patientenchecker-werneck',
+  return{v:KENN_V,monat,stand:Date.now(),quelle:ST.quelle,
     tage:Object.keys(proTag).sort().map(k=>proTag[k])};
 }
 
@@ -7949,7 +8040,7 @@ function tzLocLabel(){
 // gleich aussehende Aufgaben nebeneinander, ohne dass man sieht, wohin sie gehören.
 function tzLocKurz(id){
   const l=LOCS.find(x=>x.id===id);if(!l)return id;
-  return l.label.replace(/^Werneck\s+/,'');
+  return l.label.replace(/^(Werneck|Kitzingen)\s+/,'')||l.label;
 }
 
 function tzTage(locId){
@@ -8134,7 +8225,7 @@ function renderRueckblick(ds){
     h+='<div class="empty" style="line-height:1.7">Für diesen Tag liegen keine Zahlen vor.<br>'
       +'<span style="font-size:12px">Die Reihe beginnt an dem Tag, an dem das Tagespensum in '
       +'Betrieb ging. Sie wächst nur vorwärts — rückwirkend lässt sie sich nicht füllen.</span></div>';
-    h+='<div class="ft">KIMOJO · <b>Rückblick</b> Werneck</div>';
+    h+='<div class="ft">'+(STANDORT==='kitzingen'?'PhFiP':'KIMOJO')+' · <b>Rückblick</b> '+ST.name+'</div>';
     document.getElementById('mc').innerHTML=h;return;
   }
   if(!st){
@@ -8201,7 +8292,7 @@ function renderRueckblick(ds){
       +'<div class="si"><div class="si-l">Verloren</div><div class="si-v">'+(t.tel.verloren||0)+'</div></div>'
       +'</div>';
   }
-  h+='<div class="ft">KIMOJO · <b>Rückblick</b> Werneck</div>';
+  h+='<div class="ft">'+(STANDORT==='kitzingen'?'PhFiP':'KIMOJO')+' · <b>Rückblick</b> '+ST.name+'</div>';
   document.getElementById('mc').innerHTML=h;
 }
 // Der Navigator des Rückblicks: zurück in die Vergangenheit, vorwärts bis
@@ -8347,7 +8438,7 @@ function renderAufgaben(){
   if(tzArea==='tg')h+=tzModeToggle();
   if(tzZeigeTeamBar())h+=renderTeamBar();
   h+='<div id="tzBody"></div>';
-  h+='<div class="ft">KIMOJO · <b>Tagesziel</b> Werneck</div>';
+  h+='<div class="ft">'+(STANDORT==='kitzingen'?'PhFiP':'KIMOJO')+' · <b>Tagesziel</b> '+ST.name+'</div>';
   document.getElementById('mc').innerHTML=h;
   renderTzLocTabs();
 
@@ -11799,8 +11890,21 @@ function renderMainTabs(){
   MAIN_TABS.forEach(t=>{h+='<button class="m-tab'+(curView===t[0]?' a':'')+'" onclick="switchView(\''+t[0]+'\')">'+t[1]+'</button>';});
   document.getElementById('mainTabs').innerHTML=h;
 }
+// Reiter, die auf der thevea-Verordnungsübersicht und der Terminhistorie
+// aufbauen. Medifox liefert beides anders; bis es angeschlossen ist, sagen sie
+// das — statt Nullen zu zeigen, die nach „alles erledigt" aussehen.
+const KZ_FEHLT={offene:'💰 Offene Rezepte',verplanung:'🗓️ Verplanung',potential:'💎 Potential-Dauer',
+  folgevo:'🔄 Folge-VO',rezende:'🎯 Rezept-Ende'};
+function renderKzFehlt(v){
+  document.getElementById('mc').innerHTML='<div class="summary"><h2>'+KZ_FEHLT[v]+' · Kitzingen</h2></div>'
+    +'<div class="kz-fehlt"><b>Für Kitzingen noch nicht angeschlossen.</b> Dieser Reiter rechnet in Werneck mit der '
+    +'Verordnungsübersicht und der Terminhistorie aus thevea. Für Medifox wird er gerade nachgezogen — bis dahin '
+    +'stehen hier keine Zahlen, auch keine Nullen. Folgerezepte, Nachrücker und Blanko-Potenzial stehen im Reiter „Rezepte“.</div>'
+    +'<div class="ft">PhFiP · '+KZ_FEHLT[v].replace(/^\S+\s/,'')+'</div>';
+}
 function switchView(v){
   curView=v;renderMainTabs();
+  if(STANDORT==='kitzingen'&&KZ_FEHLT[v]){renderKzFehlt(v);return;}
   if(v==='tagesziel')renderAufgaben();
   else if(v==='luecken')renderLueckenTab();
   else if(v==='rezepte')renderRezepte();

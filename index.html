@@ -1006,7 +1006,11 @@ const STANDORTE={
     ablage:'/12_Code/Patientenchecker/Dateien Export Kitzingen/',
     locs:[{id:'kz',label:'Kitzingen',suf:'_f4',filter:null,bereich:4}],
     dat:{pl:'patientenliste.json',beh:'behandlungen_alle.json',ergo:'ergo_verordnungen_detail.json',
-         pat:'terminplan_7tage',hist:null},
+         pat:'terminplan_7tage',hist:null,
+         // Arbeitszeiten und Abwesenheiten je Tag seit 01.01. (ohne Termine).
+         // Zusammen mit terminplan_woche_f4 rechnet das die Vortage der
+         // laufenden Woche nach — siehe kennBau().
+         azHist:'auslastung_historie_f4_voll.json'},
     // Medifox liefert abgesagte Termine mit (Status 8, 16, 32). thevea nicht.
     // Eine Absage im Kalender ist keine Patientenzeit.
     // Arbeitszeiten liefert der Medifox-Flow fertig je Tag (arbeitszeiten_heute_f4).
@@ -1072,7 +1076,8 @@ const INAKTIVE_MA=new Set([]);
 // vorkommen: Die weitere Fassung trifft genau denselben einen Platzhalter.
 // Namen wie „Katrin Trommler", „Kati Theiss" oder „Viktor Ott" bleiben
 // unberuehrt — „kt" muss als eigenes Wort dastehen.
-const KEIN_THERAPEUT=/(^|[\s\-\u2013\u2014])kt([\s\-\u2013\u2014]|$)|kein\s*therapeut/i;
+// Kitzingen: der Sammelkalender "PhFiP Club" (Kürzel Club) — Kurstermine, keine Person.
+const KEIN_THERAPEUT=/(^|[\s\-\u2013\u2014])kt([\s\-\u2013\u2014]|$)|kein\s*therapeut|^\s*phfip\s+club\s*$/i;
 const _ktGesehen=new Set();
 // Sauberer Anzeigename aus einem Mitarbeiter-Objekt der Tagesplan-JSONs.
 // Die Klammerzusaetze ("Nuesslein (Physio - #2)") fallen weg.
@@ -1550,6 +1555,10 @@ async function loadAll(){
         DATA[suf].heute.az=await loadJSON('arbeitszeiten_heute'+suf+'.json',true);
         DATA[suf].morgen.az=await loadJSON('arbeitszeiten_morgen'+suf+'.json',true);
       }
+      if(ST.dat.azHist){try{
+        const ah=await loadJSON(ST.dat.azHist,true);DATA[suf].azHist={};
+        (Array.isArray(ah)?ah:[]).forEach(x=>{if(x&&x.onDay&&Array.isArray(x.spalten))DATA[suf].azHist[String(x.onDay).slice(0,10)]=x.spalten;});
+      }catch(e){DATA[suf].azHist=null;}}
       try{DATA[suf].woche.tp=ohneAbsagen(await loadJSON('terminplan_woche'+suf+'.json',true));}catch(e){DATA[suf].woche.tp=null;} // optional: Wochenübersicht (1 Datei)
       // Tagesdateien Tag +2..+13. thevea liefert 14 Tage in einem Rutsch (ein getTermine-Call,
       // ca. 0,8 MB / 2 s), der Flow zerlegt das Ergebnis in Tagesdateien. Dadurch ist die
@@ -1612,6 +1621,14 @@ async function loadAll(){
         if(dd.heute&&Array.isArray(dd.heute.tp))b.push(dd.heute.tp);
         if(dd.morgen&&Array.isArray(dd.morgen.tp))b.push(dd.morgen.tp);
         (dd.extraDays||[]).forEach(a=>{if(Array.isArray(a))b.push(a.flat());});
+        // Kitzingen hat keine Tagesdateien über morgen hinaus; dafür zählt die
+        // Wochendatei mit — ohne die Tage, die heute/morgen schon zählen. Sonst
+        // fiele heraus, wer diese Woche nur montags behandelt hat, und die
+        // nachgerechneten Vortage hätten ihn nicht.
+        if(!ST.extraTage&&dd.woche&&Array.isArray(dd.woche.tp)){
+          const schon=new Set([dd.heute&&dd.heute.tp,dd.morgen&&dd.morgen.tp].map(x=>Array.isArray(x)&&x[0]?String(x[0].Beginn).slice(0,10):''));
+          dd.woche.tp.forEach(tag=>{if(Array.isArray(tag)&&tag[0]&&!schon.has(String(tag[0].Beginn).slice(0,10)))b.push(tag);});
+        }
         b.forEach(arr=>arr.forEach(t=>{
           if(!t||!(t.PatientId||t.Art===1||t.Art===4))return;
           (t.Mitarbeiter||[]).forEach(m=>{if(m&&m.Id!=null&&!istKeinTherapeut(m))cnt[m.Id]=(cnt[m.Id]||0)+1;});
@@ -1634,6 +1651,19 @@ async function loadAll(){
           heute:analyzeRezepte(filtered.tp,filteredBeh,plData,loc.bereich,ergoDetailData,heuteDate),
           morgen:analyzeRezepte(filtered.tp,filteredBeh,plData,loc.bereich,ergoDetailData,morgenDate||heuteDate)
         };
+        // Dieselben Daten zusätzlich in thevea-Form — für die Reiter, die mit
+        // Verordnungsübersicht und Terminhistorie rechnen (siehe mfVoUebersicht).
+        if(STANDORT==='kitzingen'){
+          const hDs=heuteDate||isoDay(0);
+          // Alle Rezepte, nicht nur die der Patienten mit Termin in den nächsten
+          // Tagen: "fertig, nicht abgerechnet" und "steckengeblieben" sind gerade
+          // die, bei denen nichts mehr im Kalender steht.
+          const vo=mfVoUebersicht(behData,plData);
+          const hist=histMap(mfHistorie(behData),hDs);
+          histFehlt[loc.id]=!hist||!hist.vo;
+          VOD[loc.id]={vo,det:mfDetails(behData),hist,heuteDs:hDs,mf:true};
+          if(vo)offenTV=offenTV.concat(buildOffeneTV(vo,loc.label,hDs,DATA[loc.suf],hist));
+        }
       });
     }else{
       // Werneck/thevea: es gibt keine behandlungen_werneck.json im Medifox-Format.
@@ -1783,7 +1813,7 @@ function renderOffenePage(){
     +'in Seiten von 1000 Zeilen und nimmt nur die erste. Das muss im Flow behoben werden.</div>';
   h+='<div id="offeneContainer"></div>';
   h+='<div class="ft">KIMOJO · Offene Rezepte</div>';
-  document.getElementById('mc').innerHTML=h;
+  document.getElementById('mc').innerHTML=h;kzHinweisSetzen('offene');
   renderOffeneRezepte();
 }
 
@@ -2069,7 +2099,7 @@ function renderRezEnde(){
   h+='<div class="flt" id="reThFilter"></div>';
   h+='<div id="reContainer"></div>';
   h+='<div class="ft">KIMOJO · Rezept-Ende</div>';
-  document.getElementById('mc').innerHTML=h;
+  document.getElementById('mc').innerHTML=h;kzHinweisSetzen('rezende');
   renderReLocTabs();renderReSubTabs();renderReList();
 }
 
@@ -3759,6 +3789,107 @@ const SERIE_MIN=3;
 // für die Lücke von morgen früh. Darunter ist die Behandlung abgerissen, nicht
 // beendet — und das Rezept hat noch Einheiten.
 const NR_ABRISS_MAX=120;
+
+// ── Medifox → thevea-Form (Kitzingen) ─────────────────────────────────────
+// Offene Rezepte, Verplanung, Potential-Dauer, Folge-VO und Rezept-Ende rechnen
+// mit der thevea-Verordnungsübersicht und der Terminhistorie. Kitzingen bekommt
+// KEINE eigene Rechnung dafür, sondern dieselbe — die Medifox-Daten
+// (behandlungen_alle.json) werden nur in diese Form übersetzt. So gelten in
+// beiden Häusern dieselben Regeln.
+//
+// Was Medifox je Rezept liefert und wie es übersetzt wird:
+//   Beschreibung "6x Manuelle Therapie, 6x Warmpackungen (abgerechnet)"
+//     Menge     = die SUMME der Positionen — so zählt Medifox selbst: Bei 19
+//                 von 20 Rezepten mit mehreren Positionen ist das M in
+//                 "(N von M verplant)" genau die Summe (12x MLD + 12x KG = 24).
+//                 Jede Position steht als eigener Termineintrag da, auch wenn
+//                 zwei in derselben Sitzung liegen.
+//     Heilmittel= alle Positionen; die Physiotherapeutische Diagnostik zieht
+//                 voDiag() wie bei thevea als eine Einheit ab
+//     Stand     = die Klammer am Ende (abgerechnet, abrechenbar, vollständig
+//                 verplant, N von N verplant, unverplant)
+//   IsReadOnly  = in Medifox nicht mehr bearbeitbar: alle abgerechneten und
+//                 die 26 ohne Stand. Das ist "an der Abrechnung bzw. zu" (wie
+//                 thevea "Versandt"); alles andere läuft noch.
+//   Termine     erbracht = Status 4, je Eintrag (passend zur Menge);
+//               abgesagt = 8, 16, 32
+// Was Medifox NICHT liefert, bleibt leer und wird nicht geraten: Zuzahlung,
+// offene Rechnungen, Diagnosegruppe und Höchstmenge, Therapiefrequenz,
+// BVB/LVB, GKV/Privat. Die Reiter sagen das dort, wo es fehlt.
+const MF_STAND_RE=/\s*\((abgerechnet|abrechenbar|unverplant|vollst[äa]ndig verplant|\d+\s*von\s*\d+\s*verplant|[^()]*verplant[^()]*)\)\s*$/i;
+const MF_DIAG_RE=/diagnostik|befund/i;
+function mfPosten(beschr){
+  let b=String(beschr||'').trim();const m=b.match(MF_STAND_RE);
+  const stand=m?m[1].toLowerCase():'';if(m)b=b.slice(0,m.index);
+  const posten=b.split(/,\s*(?=\d+\s*x\s)/i).map(x=>{const q=x.match(/^\s*(\d+)\s*x\s*(.+?)\s*$/i);
+    return q?{n:+q[1],name:q[2]}:null;}).filter(Boolean);
+  return{stand,posten};
+}
+// Wie im Verantwortlichen-Dashboard: Club, Kurse, T-RENA, Reha-Sport und
+// reine Diagnostik führt Medifox als "Verordnung" — Rezepte sind das nicht.
+function mfKeinRezept(beschr){
+  const b=String(beschr||'');
+  if(/pr[aä]vention|\bclub\b|r\s*\+\s*v\s*fit|t-?rena|reha-?sport|funktionstraining|trainingseinheit in der gruppe/i.test(b))return true;
+  const p=mfPosten(b).posten;return !p.length||p.every(x=>MF_DIAG_RE.test(x.name));
+}
+const MF_ABGESAGT=new Set([8,16,32]);
+function mfVoUebersicht(beh,pl){
+  if(!Array.isArray(beh))return null;
+  const nm={};(Array.isArray(pl)?pl:[]).forEach(p=>{if(p&&p.Id)nm[String(p.Id)]=p;});
+  const out=[];
+  beh.forEach(p=>{
+    const pid=p&&p.patientId;if(!pid)return;const pp=nm[String(pid)]||{};
+    ((p.data&&p.data.Verordnungen)||[]).forEach(v=>{
+      if(!v||!v.Id||mfKeinRezept(v.Beschreibung))return;
+      const {stand,posten}=mfPosten(v.Beschreibung);
+      const beh=posten;
+      const te=(v.Termine||[]).filter(t=>t&&t.Datum);
+      out.push({id:String(v.Id),verknuepfterPatientId:String(pid),
+        vorname:pp.Vorname||'',nachname:pp.Nachname||'',
+        formular:'',status:v.IsReadOnly?'Versandt':'InBehandlung',
+        ausstellungsdatum:v.Datum||null,
+        heilmittel:beh.map(x=>x.name).join(', '),
+        summeDurchfuehrbareBehandlungen:beh.reduce((a,x)=>a+x.n,0),
+        summeDurchgefuehrteBehandlungen:te.filter(t=>t.Status===4).length,
+        zuzahlung:null,zuzahlungsrelevant:false,zuzahlungQuittiert:false,zuzahlungsrechnungBezahlt:false,
+        rechnungOffen:false,hatAktuelleRechnungen:false,
+        mfStand:stand,mfBlanko:!!(v.ReadOnlyInformation&&v.ReadOnlyInformation.IsBlankoverordnung)});
+    });
+  });
+  return out;
+}
+// Terminzeilen in der Form, die histMap() ohnehin annimmt.
+function mfHistorie(beh){
+  if(!Array.isArray(beh))return null;
+  const out=[];
+  beh.forEach(p=>{
+    const pid=p&&p.patientId;if(!pid)return;
+    ((p.data&&p.data.Verordnungen)||[]).forEach(v=>{
+      if(!v||!v.Id||mfKeinRezept(v.Beschreibung))return;
+      (v.Termine||[]).forEach(t=>{
+        if(!t||!t.Datum)return;
+        const ab=MF_ABGESAGT.has(t.Status);
+        const mn=String(t.MitarbeiterName||'').trim(),i=mn.lastIndexOf(' ');
+        out.push({VerordnungId:String(v.Id),PatientId:String(pid),Datum:t.Datum,
+          Status:ab?'ABGESAGT':String(t.Status),
+          Mitarbeiter:mn?[{Vorname:i>0?mn.slice(0,i):mn,Nachname:i>0?mn.slice(i+1):''}]:[]});
+      });
+    });
+  });
+  return out;
+}
+// Detailfelder, soweit Medifox sie kennt: Blanko und ICD-10. Alles andere bleibt
+// leer (siehe oben).
+function mfDetails(beh){
+  const M={};
+  (Array.isArray(beh)?beh:[]).forEach(p=>((p&&p.data&&p.data.Verordnungen)||[]).forEach(v=>{
+    if(!v||!v.Id)return;
+    M[String(v.Id)]={id:String(v.Id),ausst:String(v.Datum||'').slice(0,10),
+      bl:v.ReadOnlyInformation&&v.ReadOnlyInformation.IsBlankoverordnung?1:0,hb:0,dr:0,
+      icd:String(v.ErsterIcd10||'').replace('.',''),icdT:'',dg:'',dgMax:0,fv:0,fb:0,ende:'',bvb:0,mf:1};
+  }));
+  return M;
+}
 
 function histMap(roh,heuteDs){
   if(!roh)return null;
@@ -6445,6 +6576,32 @@ function kennBau(vorhanden){
     try{const s=computeKpiSnapshot();delete s.date;delete s.ts;t.rez=s;}catch(e){}
   }
 
+  // Kitzingen: Die Vortage der laufenden Woche lassen sich nachrechnen. Medifox
+  // liefert die ganze Woche mit Beginn und Ende (terminplan_woche_f4) und die
+  // Arbeitszeiten jedes Tages (auslastung_historie_f4_voll). Gerechnet wird mit
+  // demselben kennLoc() wie für heute. Nur Tage, die noch KEINEN Stand haben —
+  // was an einem Tag selbst geschrieben wurde, bleibt stehen. Frühere Wochen
+  // nicht: Dafür gibt es in Medifox nur Rezepttermine ohne Dauer und ohne
+  // interne Einträge, und eine Auslastung daraus wäre geraten.
+  if(STANDORT==='kitzingen'&&datenTag){
+    LOCS.forEach(l=>{
+      const dd=DATA[l.suf];if(!dd||!dd.azHist||!dd.woche||!Array.isArray(dd.woche.tp))return;
+      dd.woche.tp.forEach(tag=>{
+        if(!Array.isArray(tag)||!tag.length)return;
+        const ds=String(tag[0].Beginn||'').slice(0,10);
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(ds)||ds>=datenTag||ds.slice(0,7)!==monat)return;
+        const az=dd.azHist[ds];if(!az)return;
+        const t=proTag[ds]||(proTag[ds]={ds});
+        if(t.loc&&t.loc[l.id])return;
+        dd._nach={tp:tag,az};
+        const h=kennLoc(l.id,'_nach');delete dd._nach;
+        if(!h)return;
+        h.nachgerechnet=true;
+        t.loc=t.loc||{};t.loc[l.id]={label:l.label,heute:h};
+      });
+    });
+  }
+
   // Die Schlüsselliste braucht nur der laufende Tag: Sie dient allein dem
   // Vergleich mit dem nächsten Lauf. Für vergangene Tage bleiben die Zahlen
   // stehen, die Liste fällt weg — sonst wüchse die Monatsdatei um das Zehnfache
@@ -8822,7 +8979,7 @@ function renderFolgeVO(){
   h+='<div class="search-wrap"><span class="sw-ico">🔍</span><input type="text" id="fvSearch" placeholder="Patient, Heilmittel oder ICD suchen..." value="'+escA(fvSuche)+'" oninput="fvSuchen(this.value)"></div>';
   h+='<div id="fvListe"></div>';
   h+='<div class="ft">KIMOJO · Folge-VO · thevea führt an der Verordnung keinen Arzt — das Namensfeld pflegt die Praxis selbst, es bleibt am Gerät.</div>';
-  document.getElementById('mc').innerHTML=h;
+  document.getElementById('mc').innerHTML=h;kzHinweisSetzen('folgevo');
   const el=document.getElementById('fvLocTabs');
   let t='';LOCS.forEach(l=>{t+='<button class="tab'+(fvLoc===l.id?' a':'')+'" onclick="fvSetLoc(\''+l.id+'\')">'+esc(l.label)+'</button>';});
   el.innerHTML=t;
@@ -9001,7 +9158,7 @@ function renderVerplanung(){
   h+='<div class="search-wrap"><span class="sw-ico">🔍</span><input type="text" id="vpSearch" placeholder="Patient oder Heilmittel suchen..." value="'+escA(vpSuche)+'" oninput="vpSuchen(this.value)"></div>';
   h+='<div id="vpListe"></div>';
   h+='<div class="ft">KIMOJO · Verplanung</div>';
-  document.getElementById('mc').innerHTML=h;
+  document.getElementById('mc').innerHTML=h;kzHinweisSetzen('verplanung');
   const el=document.getElementById('vpLocTabs');
   let t='<button class="tab'+(vpLoc===TZ_ALLE?' a':'')+'" onclick="vpSetLoc(\''+TZ_ALLE+'\')">Alle</button>';
   LOCS.forEach(l=>{t+='<button class="tab'+(vpLoc===l.id?' a':'')+'" onclick="vpSetLoc(\''+l.id+'\')">'+esc(l.label)+'</button>';});
@@ -9238,7 +9395,7 @@ function renderPotential(){
   h+=renderTeamBar();
   h+='<div id="pdListe"></div>';
   h+='<div class="ft">KIMOJO · Potential-Dauer</div>';
-  document.getElementById('mc').innerHTML=h;
+  document.getElementById('mc').innerHTML=h;kzHinweisSetzen('potential');
   let t='';LOCS.forEach(l=>{t+='<button class="tab'+(pdLoc===l.id?' a':'')+'" onclick="pdSetLoc(\''+l.id+'\')">'+esc(l.label)+'</button>';});
   document.getElementById('pdLocTabs').innerHTML=t;
 
@@ -11893,14 +12050,30 @@ function renderMainTabs(){
 // Reiter, die auf der thevea-Verordnungsübersicht und der Terminhistorie
 // aufbauen. Medifox liefert beides anders; bis es angeschlossen ist, sagen sie
 // das — statt Nullen zu zeigen, die nach „alles erledigt" aussehen.
-const KZ_FEHLT={offene:'💰 Offene Rezepte',verplanung:'🗓️ Verplanung',potential:'💎 Potential-Dauer',
-  folgevo:'🔄 Folge-VO',rezende:'🎯 Rezept-Ende'};
+// Seit 29.10.2026 über mfVoUebersicht() angeschlossen; die Liste bleibt als
+// Schalter, falls ein Reiter für Medifox wieder zurückgenommen werden muss.
+const KZ_FEHLT={};
 function renderKzFehlt(v){
   document.getElementById('mc').innerHTML='<div class="summary"><h2>'+KZ_FEHLT[v]+' · Kitzingen</h2></div>'
     +'<div class="kz-fehlt"><b>Für Kitzingen noch nicht angeschlossen.</b> Dieser Reiter rechnet in Werneck mit der '
     +'Verordnungsübersicht und der Terminhistorie aus thevea. Für Medifox wird er gerade nachgezogen — bis dahin '
     +'stehen hier keine Zahlen, auch keine Nullen. Folgerezepte, Nachrücker und Blanko-Potenzial stehen im Reiter „Rezepte“.</div>'
     +'<div class="ft">PhFiP · '+KZ_FEHLT[v].replace(/^\S+\s/,'')+'</div>';
+}
+// Was Medifox für diese Reiter nicht liefert — direkt unter der Überschrift,
+// damit eine Null dort nicht als „nichts offen" gelesen wird.
+const KZ_HINWEIS={
+  offene:'<b>Kitzingen (Medifox):</b> Zuzahlung und offene Rechnungen liefert der Medifox-Export nicht — „Rechnung offen“ und „Zuzahlung“ bleiben deshalb leer, auch wenn es welche gibt. „Fertig, nicht abgerechnet“ und „Steckengeblieben“ sind vollständig.',
+  verplanung:'<b>Kitzingen (Medifox):</b> Menge, erbrachte und gebuchte Einheiten kommen aus den Medifox-Rezepten; Medifox zählt jede Heilmittel-Position als eigene Einheit (6× MT + 6× Wärme = 12).',
+  potential:'<b>Kitzingen (Medifox):</b> GKV/Privat und das BVB/LVB-Kennzeichen liefert der Medifox-Export nicht — <b>LHB, BVB und Privat</b> bleiben deshalb leer, auch wenn es solche Patienten gibt. Blanko, MLD 45/60, KG-ZNS und Hausbesuch werden erkannt.',
+  folgevo:'<b>Kitzingen (Medifox):</b> Diagnosegruppe und BVB/LVB liefert der Medifox-Export nicht. Ohne Diagnosegruppe gibt es keine orientierende Menge aus dem Katalog — solche Fälle werden nicht nach Restmenge bewertet, und „budgetfrei“ (BVB/LVB) kann es hier nicht geben.',
+  rezende:''
+};
+function kzHinweisSetzen(v){
+  if(STANDORT!=='kitzingen'||!KZ_HINWEIS[v])return;
+  try{const mc=document.getElementById('mc'),s=mc&&mc.querySelector('.summary');
+    const h='<div class="kz-fehlt">'+KZ_HINWEIS[v]+'</div>';
+    if(s)s.insertAdjacentHTML('afterend',h);else if(mc)mc.insertAdjacentHTML('afterbegin',h);}catch(e){}
 }
 function switchView(v){
   curView=v;renderMainTabs();

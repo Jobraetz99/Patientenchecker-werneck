@@ -2828,7 +2828,7 @@ function renderDay(dd,day,locLabel){
     h+='</tbody></table>'
       +'<div style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.7">'
       +'<b>verplanbar</b> ist die Arbeitszeit ohne alles, was nicht zu vergeben war: '
-      +'<b>geblockt</b> (FL-Zeit, Inno-Time, interne Fortbildung, Einarbeitung, ganztägige Blocker) '
+      +'<b>geblockt</b> (FL-Zeit, FL-Meeting, EAP-Zeit, Büro-Zeit, Weekly Club Meeting, Inno-Time, interne Fortbildung, Einarbeitung, eine in die Arbeitszeit verschobene Pause, ganztägige Blocker) '
       +'und <b>reserviert</b> (kurze Blocker — für einen Dauerpatienten freigehaltene Plätze). '
       +'<b>sonstiges</b> bleibt dagegen drin: Besprechungen, Planung und Einweisungen sind das, was '
       +'jemand in einer Lücke erledigt hat, weil kein Patient da war — die Zeit war zu vergeben, sie '
@@ -3079,8 +3079,21 @@ function terminMin(t){
 // diese Zeile zählte es als Patientenzeit und hob Angelinas Auslastung um einen
 // Punkt. Geprüft wird vor allem anderen, weil der Name der Sache sonst gewinnt.
 const TA_ORGA=/\bplanung\b|vorbereit|\bmeeting\b|besprech/i;
+// Feste Zeiten, die nicht zum Verplanen da sind, auch wenn sie "Meeting"
+// heissen — deshalb VOR TA_ORGA: EAP-Zeit (Karrierezeit), FL-Meeting,
+// Büro-Zeit, Weekly Club Meeting.
+//
+// Und die Pause. In der Vorlage liegt die Pause ausserhalb der Arbeitszeit.
+// Stehen in der regulären Pause Patienten, wächst die Schicht um diese Zeit,
+// und die Pause wird in die Arbeitszeit verschoben und als "Pause" eingetragen.
+// Zählte sie als sonstige Arbeitszeit, sänke die Auslastung um genau die
+// Stunde, die am Patienten gearbeitet wurde. Als nicht verfügbar gleicht sie
+// das aus. Eine Pause an ihrer regulären Stelle liegt ausserhalb der Schicht
+// und zählt ohnehin nicht (clip schneidet auf die Schicht zu).
+const TA_BLK_FEST=/\beap\b|\bfl[\s.-]*meeting|b(?:ü|ue|u)ro[\s.-]*zeit|weekly\s*club\s*meeting|pausen?\b/i;
 function terminArt(t){
   const bz=String((t&&t.Bezeichnung)||'');
+  if(TA_BLK_FEST.test(bz))return'blk';
   if(TA_ORGA.test(bz))return'son';
   if(TA_BLK_NAME.test(bz))return'blk';
   if(TA_BLK_GEN.test(bz))return terminMin(t)<=TA_RES_MAX?'res':'blk';

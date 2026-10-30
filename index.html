@@ -2045,8 +2045,8 @@ function getRezEndePatients(locId,day){
   // (Die Historie blickt weiter voraus, aber doppelt hält besser: ein frisch
   // gelegter Termin steht im Tagesexport früher als im Historienlauf.)
   const patMax={};
-  // Beginn des Besuchs je Rezept und Tag (frühester Termin) — damit die
-  // Therapiemanagerin weiß, wann der Patient zum letzten Termin kommt.
+  // Ende des Besuchs je Rezept und Tag (spätester Termin): Bis dahin ist der
+  // Patient da, dann muss die Therapiemanagerin ihn abholen.
   const voZeit={};
   {
     const buckets=[];
@@ -2058,8 +2058,9 @@ function getRezEndePatients(locId,day){
       const ds=String(x.Beginn).slice(0,10);const k=String(x.PatientId);
       if(!patMax[k]||ds>patMax[k])patMax[k]=ds;
       const v=x.VerordnungId!=null?x.VerordnungId:x.OtrVerordnungId;
-      if(v!=null){const d=new Date(x.Beginn),dk=reDayKey(d);
-        if(dk){const kk=v+'|'+dk;if(!voZeit[kk]||d<voZeit[kk])voZeit[kk]=d;}}
+      const e=x.Ende?new Date(x.Ende):null;
+      if(v!=null&&e&&!isNaN(e)){const dk=reDayKey(new Date(x.Beginn));
+        if(dk){const kk=v+'|'+dk;if(!voZeit[kk]||e>voZeit[kk])voZeit[kk]=e;}}
     }));
   }
   const rows=[];const seen=new Set(); // Dedupe: pid + Rezept-Id
@@ -2096,8 +2097,8 @@ function getRezEndePatients(locId,day){
     // Empfangs (wann kommt er noch?), "5/6 Einheiten" die Sprache von thevea.
     const besuchNum=isLetzter?tage.length:tage.length-1;
     const lastDs=tage[lastIdx];
-    // Uhrzeit des letzten Termins: nur wenn er im Terminplan steht, sonst leer.
-    const lz=voZeit[vid+'|'+lastDs]||(isLetzter?apptDate:null);
+    // Ende des letzten Termins: nur wenn er im Terminplan steht, sonst leer.
+    const lz=voZeit[vid+'|'+lastDs]||(isLetzter&&t.Ende&&!isNaN(new Date(t.Ende))?new Date(t.Ende):null);
     const endeZeit=lz?fmt(lz):'';
     // Folgetermin gilt als ausgemacht, wenn der Patient NACH dem letzten Tag
     // dieses Rezepts schon irgendeinen Termin hat. Zwei Quellen:

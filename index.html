@@ -2047,7 +2047,7 @@ function getRezEndePatients(locId,day){
   const patMax={};
   // Ende des Besuchs je Rezept und Tag (spätester Termin): Bis dahin ist der
   // Patient da, dann muss die Therapiemanagerin ihn abholen.
-  const voZeit={};
+  const voZeit={},voBeginn={};
   {
     const buckets=[];
     if(Array.isArray(dd.heute&&dd.heute.tp))buckets.push(dd.heute.tp);
@@ -2058,9 +2058,10 @@ function getRezEndePatients(locId,day){
       const ds=String(x.Beginn).slice(0,10);const k=String(x.PatientId);
       if(!patMax[k]||ds>patMax[k])patMax[k]=ds;
       const v=x.VerordnungId!=null?x.VerordnungId:x.OtrVerordnungId;
-      const e=x.Ende?new Date(x.Ende):null;
-      if(v!=null&&e&&!isNaN(e)){const dk=reDayKey(new Date(x.Beginn));
-        if(dk){const kk=v+'|'+dk;if(!voZeit[kk]||e>voZeit[kk])voZeit[kk]=e;}}
+      const e=x.Ende?new Date(x.Ende):null,b=new Date(x.Beginn),dk=reDayKey(b);
+      if(v!=null&&dk){const kk=v+'|'+dk;
+        if(e&&!isNaN(e)&&(!voZeit[kk]||e>voZeit[kk]))voZeit[kk]=e;
+        if(!voBeginn[kk]||b<voBeginn[kk])voBeginn[kk]=b;}
     }));
   }
   const rows=[];const seen=new Set(); // Dedupe: pid + Rezept-Id
@@ -2100,6 +2101,9 @@ function getRezEndePatients(locId,day){
     // Ende des letzten Termins: nur wenn er im Terminplan steht, sonst leer.
     const lz=voZeit[vid+'|'+lastDs]||(isLetzter&&t.Ende&&!isNaN(new Date(t.Ende))?new Date(t.Ende):null);
     const endeZeit=lz?fmt(lz):'';
+    // Ohne Ende wenigstens der Beginn — das Dashboard kennzeichnet ihn.
+    const lb=lz?null:(voBeginn[vid+'|'+lastDs]||(isLetzter?apptDate:null));
+    const endeBeginn=lb?fmt(lb):'';
     // Folgetermin gilt als ausgemacht, wenn der Patient NACH dem letzten Tag
     // dieses Rezepts schon irgendeinen Termin hat. Zwei Quellen:
     //   1) Termin-Historie auf Patientenebene (voller Vorausblick, alle Rezepte,
@@ -2118,7 +2122,7 @@ function getRezEndePatients(locId,day){
       time:apptDate,timeStr:fmt(apptDate),
       heilmittel:t.Bezeichnung||t.Heilmittel||(vo?String(vo.heilmittel||''):''),
       positionNum,totalY,besuchNum,besuche:tage.length,
-      position:isLetzter?'letzter':'vorletzter',folge,ende:lastDs,endeZeit
+      position:isLetzter?'letzter':'vorletzter',folge,ende:lastDs,endeZeit,endeBeginn
     });
   });
   rows.sort((a,b)=>a.time-b.time); // zeitlich aufsteigend
@@ -6484,7 +6488,7 @@ function kennLoc(locId,sub){
       try{
         return getRezEndePatients(locId,sub).map(r=>({
           n:r.name,p:r.position==='letzter'?'l':'v',f:r.folge?1:0,
-          id:String(r.pid),v:String(r.vid),th:r.therapeut||'',e:r.ende||'',ez:r.endeZeit||''}));
+          id:String(r.pid),v:String(r.vid),th:r.therapeut||'',e:r.ende||'',ez:r.endeZeit||'',eb:r.endeBeginn||''}));
       }catch(e){return[];}
     })()};
 }

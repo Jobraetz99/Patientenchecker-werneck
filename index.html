@@ -4467,6 +4467,27 @@ function buildRezepteTV(voRoh,dd,refDs,detRoh,hist){
       pi[id].th.add(((m.Vorname||'')+' '+(m.Nachname||'')).trim());});
   }));
   Object.values(pi).forEach(p=>p.termine.sort((a,b)=>String(a.beginn)<String(b.beginn)?-1:1));
+  // KGG-Stunden (09.11.2026). In Werneck heißt der Patiententermin bei KGG
+  // „Blankoverordnung", am Namen ist KGG nicht zu erkennen. Erkennbar ist es
+  // am Zeitfenster: Die KGG-Stunde steht als eigener 60-Minuten-Block „KGG"
+  // im Kalender des Therapeuten, die Patienten liegen als 20-Minuten-Termine
+  // darin. Ein Termin zählt als KGG, wenn er sich mit einem solchen Block
+  // desselben Therapeuten überschneidet (ohne Therapeut am Termin: mit
+  // irgendeinem KGG-Block).
+  const kggBl=[],kggSeen=new Set();
+  buckets.forEach(arr=>(arr||[]).forEach(t=>{
+    if(!t||t.PatientId||t.Art===1||t.Art===4)return;
+    if(!TA_KGG.test(String(t.Bezeichnung||t.Titel||'')))return;
+    const s=new Date(t.Beginn).getTime(),e=new Date(t.Ende).getTime();if(!(e>s))return;
+    const mids=(t.Mitarbeiter||[]).map(m=>String(m&&m.Id)).filter(x=>x&&x!=='undefined');
+    const key=s+'|'+e+'|'+mids.join(',');if(kggSeen.has(key))return;kggSeen.add(key);
+    kggBl.push({s,e,mids});
+  }));
+  const imKgg=te=>{
+    const s=new Date(te.beginn).getTime(),e=new Date(te.ende).getTime();if(!(e>s))return false;
+    const mids=(te.ma||[]).map(m=>String(m&&m.Id)).filter(x=>x&&x!=='undefined');
+    return kggBl.some(b=>b.s<e&&b.e>s&&(!mids.length||!b.mids.length||b.mids.some(x=>mids.includes(x))));
+  };
 
   // 2) Offene Einheiten je Patient. Entwürfe und abgeschlossene Rezepte zählen nicht mit,
   //    sonst stünden längst erledigte Verordnungen als Potenzial in der Liste.
@@ -4576,12 +4597,22 @@ function buildRezepteTV(voRoh,dd,refDs,detRoh,hist){
 
     // Blanko-Kachel: alle laufenden Blankoverordnungen, auch die von Patienten,
     // die ohnehin heute kommen. Die Frist läuft unabhängig vom Terminplan.
-    if(blAktiv)
+    if(blAktiv){
+      // KGG-Planung der kommenden Termine im geladenen 14-Tage-Fenster ab dem Stichtag.
+      const kt=inf?inf.termine.filter(te=>String(te.beginn||'').slice(0,10)>=heuteDs):[];
+      const kN=kt.length,kK=kt.filter(imKgg).length;
+      const kggSt=!kN?'kgO':kK===kN?'kgV':kK?'kgT':'kgN';
+      const kggTxt=!kN?'kein Termin in den nächsten 14 Tagen'
+        :kK===kN?(kN===1?'Termin in KGG-Stunde':'alle '+kN+' Termine in KGG-Stunden')
+        :kK?kK+' von '+kN+' Terminen in KGG-Stunden'
+        :(kN===1?'Termin nicht in KGG-Stunde':'keiner der '+kN+' Termine in KGG-Stunden');
       cat.blanko.push({name:(inf&&inf.name)||P.name,icd:P.blIcd||icdStr,beschr:P.blHm||P.hm[0]||'Blankoverordnung',
-        detail:'Noch '+blRest+' Tage Laufzeit (bis '+blEndeDs+')'+(P.blBvb?' · BVB':''),
+        kggSt,kggN:kN,kggK:kK,tags:{[kggSt]:true},
+        detail:'Noch '+blRest+' Tage Laufzeit (bis '+blEndeDs+')'+(P.blBvb?' · BVB':'')+' · '+kggTxt,
         hint:blRest<=21?'Frist läuft ab — terminieren!':'Therapeut bestimmt Menge und Dauer',
         termin:inf?inf.termine[0]:null,gep:0,erb:P.erbracht,tot:P.gesamt,
         badge:blRest+'T',badgeC:blRest<=21?'c-red':'c-purple'});
+    }
 
     // BVB/LVB-Kachel: thevea beantwortet die Frage nach besonderem Verordnungsbedarf
     // oder Einzelgenehmigung selbst. Diese Behandlungen laufen nicht gegen das
@@ -4915,10 +4946,10 @@ function showRD(k){
   document.querySelectorAll('.rkpi').forEach(x=>x.classList.remove('active'));const el=document.getElementById('rk-'+k);if(el)el.classList.add('active');
   if(k==='patienten'){showErgoPatients();return;}
   if(k==='blankopot'){showBlankoPot();return;}
-  const c=RC;let items=[],title='',isNR=false,isBVB=false;
+  const c=RC;let items=[],title='',isNR=false,isBVB=false,isBL=false;
   if(k==='nr'){items=c.nr;title='🔥 Nachrücker';isNR=true;}
   else if(k==='bvb'){items=c.bvb;title='🏥 BVB/LVB';isBVB=true;}
-  else if(k==='blanko'){items=c.blanko;title='💊 Blanko (16 Wo)';}
+  else if(k==='blanko'){items=c.blanko;title='💊 Alle Blanko (16 Wo)';isBL=true;}
   else if(k==='folge'){items=c.folge;title='🔴 Folgerezept';}
   else if(k==='reserv'){items=c.reserv;title='⚠️ Ohne VO';}
   else if(k==='freq'){items=c.freq;title='📈 Frequenz↑';}
@@ -4931,6 +4962,10 @@ function showRD(k){
     if(hbAus.length)h+=`<div style="font-size:9px;color:var(--muted);margin-bottom:6px" `
       +`title="${escA(hbAus.map(x=>x.name).join(', '))}">🚗 ${hbAus.length} Hausbesuch`
       +`${hbAus.length===1?'':'e'} nicht in der Liste</div>`;}
+  if(isBL){h+=`<div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap">`;
+    const n=st=>items.filter(i=>i.kggSt===st).length;
+    [{f:'all',l:'Alle',c:items.length},{f:'kgV',l:'💪 In KGG geplant',c:n('kgV')},{f:'kgT',l:'Teils KGG',c:n('kgT')},{f:'kgN',l:'Nicht in KGG',c:n('kgN')},{f:'kgO',l:'Ohne Termin',c:n('kgO')}].forEach(x=>{h+=`<button class="hdr-btn" style="font-size:8px" onclick="filterNR('${x.f}')">${x.l} (${x.c})</button>`;});h+=`</div>`;
+    h+=`<div style="font-size:9px;color:var(--muted);margin-bottom:8px">KGG heißt: Der Termin liegt im Zeitfenster eines KGG-Blocks desselben Therapeuten. Gezählt werden die Termine der nächsten 14 Tage.</div>`;}
   if(isBVB){h+=`<div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap">`;
     [{f:'all',l:'Alle',c:items.length},{f:'hb',l:'🚗 Hausbesuch',c:items.filter(i=>i.hb).length},{f:'dau',l:'DAU',c:items.filter(i=>i.dau).length},{f:'clean',l:'Ohne DAU & HB',c:items.filter(i=>!i.hb&&!i.dau).length}].forEach(x=>{h+=`<button class="hdr-btn" style="font-size:8px" onclick="filterNR('${x.f}')">${x.l}(${x.c})</button>`;});h+=`</div>`;}
   items.forEach((it,i)=>{
@@ -4950,6 +4985,7 @@ function showRD(k){
       if(isBVB&&it.tot)h+=`<span class="pr-b c-blue" title="Verordnete Behandlungsmenge">📋 ${it.tot}er</span>`;
       if(isBVB&&it.hb)h+=`<span class="pr-b c-amber" title="Hausbesuch">🚗 HB</span>`;
       if(isBVB&&it.dau)h+=`<span class="pr-b c-purple" title="Dauerpatient">DAU</span>`;
+      if(isBL&&it.kggN)h+=`<span class="pr-b ${it.kggSt==='kgV'?'c-green':it.kggSt==='kgT'?'c-amber':'c-red'}" title="Termine der nächsten 14 Tage in KGG-Stunden">💪 ${it.kggK}/${it.kggN}</span>`;
       if(it.badge)h+=`<span class="pr-b ${it.badgeC||''}">${it.badge}</span>`;
     }
     h+=`<div class="pr-t">${th}</div></div>`;
@@ -9679,7 +9715,7 @@ function rzKacheln(c){
     {k:'reserv',   l:'⚠️ Ohne Verordnung', v:(c.reserv||[]).length,   co:'var(--amber)', s:'Termin ohne Rezept · klären'},
     {k:'freq',     l:'📈 Frequenz erhöhen',v:(c.freq||[]).length,     co:'var(--blue)',  s:'Rezept läuft zu langsam'},
     {k:'blankopot',l:'💎 Blanko-Potenzial',v:(c.blankopot||[]).filter(x=>x.tv||x.bvbTyp||x.rest>0).length,co:'var(--purple)',s:'Arzt auf Blanko ansprechen'},
-    {k:'blanko',   l:'💊 Blanko läuft',    v:(c.blanko||[]).length,   co:'var(--purple)',s:'16 Wochen · Menge selbst steuern'},
+    {k:'blanko',   l:'💊 Alle Blanko',     v:(c.blanko||[]).length,   co:'var(--purple)',s:(c.blanko||[]).filter(x=>x.kggSt&&x.kggSt!=='kgV').length+' nicht ganz in KGG geplant'},
     {k:'bvb',      l:'🏥 BVB/LVB',         v:(c.bvb||[]).length,      co:'var(--green)', s:'außerhalb des Budgets'},
     {k:'all',      l:'📋 Alle Fälle',      v:(c.bvb||[]).length+(c.blanko||[]).length+(c.folge||[]).length+(c.reserv||[]).length+(c.freq||[]).length,co:'var(--dark)',s:'gesamt in dieser Ansicht'}
   ];

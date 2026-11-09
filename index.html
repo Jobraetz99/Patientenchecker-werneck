@@ -4321,7 +4321,9 @@ let voFehlt={};
 function voNodes(roh,loc){
   if(!roh)return null;
   if(Array.isArray(roh))return roh;
-  const u=(roh.data&&roh.data.verordnungUebersicht)||roh.verordnungUebersicht||null;
+  // Seit thevea 26.11 (09.11.2026) eine Ebene tiefer: data.verordnungUebersichtKontext.verordnungUebersicht
+  const d=roh.data||roh,k=d.verordnungUebersichtKontext;
+  const u=(k&&k.verordnungUebersicht)||d.verordnungUebersicht||null;
   const n=(u&&u.nodes)||roh.nodes;
   if(!Array.isArray(n))return null;
   const ges=u&&u.pageInfo&&u.pageInfo.nodesCount;

@@ -5026,7 +5026,7 @@ function showRD(k){
       if(isBVB&&it.hb)h+=`<span class="pr-b c-amber" title="Hausbesuch">🚗 HB</span>`;
       if(isBVB&&it.dau)h+=`<span class="pr-b c-purple" title="Dauerpatient">DAU</span>`;
       if(isBO&&it.kggSt&&it.kggSt!=='kgO')h+=`<span class="pr-b ${it.kggSt==='kgV'?'c-green':it.kggSt==='kgT'?'c-amber':'c-red'}" title="KGG-Planung der nächsten 14 Tage">💪 ${it.kggSt==='kgV'?'KGG':it.kggSt==='kgT'?'teils KGG':'kein KGG'}</span>`;
-      if(isBL&&it.kggN)h+=`<span class="pr-b ${it.kggSt==='kgV'?'c-green':it.kggSt==='kgT'?'c-amber':'c-red'}" title="Termine der nächsten 14 Tage in KGG-Stunden">💪 ${it.kggK}/${it.kggN}</span>`;
+      if(isBL&&it.kggN)h+=`<span class="pr-b ${it.kggSt==='kgV'?'c-green':it.kggSt==='kgT'?'c-amber':'c-red'}" title="Termine der nächsten 14 Tage in KGG-Stunden">💪 ${it.kggK} von ${it.kggN} in KGG</span>`;
       if(it.badge)h+=`<span class="pr-b ${it.badgeC||''}">${it.badge}</span>`;
     }
     h+=`<div class="pr-t">${th}</div></div>`;

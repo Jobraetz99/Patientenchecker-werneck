@@ -1056,6 +1056,14 @@ function ohneAbsagen(tp){
 // Blanko-Obergrenzen (grüne Phase) je ICD: Weichteil (M-Codes) = 18 vorrangig + 6 ergänzend;
 // Fraktur/Luxation (S42/S43) = 26 vorrangig + 8 ergänzend. Bei Bedarf hier anpassen (z.B. fxErg:9).
 const BLANKO_MAX={wtVor:18,wtErg:6,fxVor:26,fxErg:8};
+// Orientierungsmenge einer Blankoverordnung für das vorrangige Heilmittel:
+// Fraktur/Luxation (S42/S43) 26, sonst 18. Ohne Diagnose: null — dann wird
+// keine Menge angenommen, sondern die Lücke angezeigt.
+function blankoGrenze(icd){
+  const c=String(icd||'').toUpperCase().replace(/\s+/g,'');
+  if(!/^[A-Z]\d\d/.test(c))return null;
+  return /^S4[23]/.test(c)?BLANKO_MAX.fxVor:BLANKO_MAX.wtVor;
+}
 // KGG (Gerätegestützte Krankengymnastik) läuft als Gruppe: ein interner KGG-Block (Art 3)
 // hat Platz für KGG_CAP Patienten gleichzeitig. Bei Bedarf hier anpassen.
 const KGG_CAP=3;
@@ -4429,7 +4437,7 @@ function voHausbesuch(v,det){
 }
 
 function buildRezepteTV(voRoh,dd,refDs,detRoh,hist){
-  const cat={bvb:[],blanko:[],blankopot:[],folge:[],reserv:[],freq:[],nr:[],hbAus:[]};
+  const cat={bvb:[],blanko:[],blankoOffen:[],blankopot:[],folge:[],reserv:[],freq:[],nr:[],hbAus:[]};
   // Die Terminhistorie je Verordnung. Sie stand dieser Funktion schon immer als
   // Parameter zur Verfuegung und wurde nie gelesen — daher die ueberhoehten
   // Offen-Zahlen. Fehlt sie, bleibt es beim thevea-Zaehler; dass sie fehlt,
@@ -4438,6 +4446,7 @@ function buildRezepteTV(voRoh,dd,refDs,detRoh,hist){
   const HV=id=>(HVO&&id!=null)?(HVO[String(id)]||null):null;
   const nodes=voNodes(voRoh);
   if(!nodes)return cat;
+  // (blankoOffen wird am Ende nach Dringlichkeit sortiert, siehe unten)
 
   // 0) Verordnungsdetails. Nicht jede Verordnung hat welche: Privat- und
   //    BG-Formulare tragen keine Diagnose, die fallen hier heraus.
@@ -4504,7 +4513,7 @@ function buildRezepteTV(voRoh,dd,refDs,detRoh,hist){
                        vos:0,hbNur:true,bl:false,blNeu:null,
                        icds:new Set(),icdT:null,dgs:new Set(),
                        bvb:false,po:false,bp:false,fv:null,fb:null,dgMax:0,
-                       blEnde:null,blIcd:null,blHm:null,blBvb:false,
+                       blEnde:null,blIcd:null,blHm:null,blBvb:false,blId:null,blErbDoku:0,
                        name:((v.nachname||'')+', '+(v.vorname||''))};
     if(v.status!=='InBehandlung')return;
     const P=pat[k];
@@ -4540,6 +4549,7 @@ function buildRezepteTV(voRoh,dd,refDs,detRoh,hist){
         P.blIcd=(D&&D.icd)?icdPunkt(D.icd):null;
         P.blHm=hm||null;
         P.blBvb=!!(D&&D.bvb);
+        P.blId=v.id;P.blErbDoku=voErb(v);
       }
     }else{
       // Dreigliedrig, genau wie in buildVerplanung: verordnet − erbracht −
@@ -4612,6 +4622,28 @@ function buildRezepteTV(voRoh,dd,refDs,detRoh,hist){
         hint:blRest<=21?'Frist läuft ab — terminieren!':'Therapeut bestimmt Menge und Dauer',
         termin:inf?inf.termine[0]:null,gep:0,erb:P.erbracht,tot:P.gesamt,
         badge:blRest+'T',badgeC:blRest<=21?'c-red':'c-purple'});
+
+      // Blanko offen (09.11.2026): Ziel ist, dass jede Blanko bis zur
+      // Orientierungsmenge durchgeplant ist. 18 bzw. 26 Einheiten des
+      // vorrangigen Heilmittels, abzüglich stattgefundener und gebuchter
+      // Termine dieser Verordnung (Terminhistorie). Ohne Historie oder ohne
+      // Diagnose wird nichts gerechnet, sondern die Lücke genannt.
+      const hvB=HV(P.blId);
+      const grenze=blankoGrenze(P.blIcd);
+      const erbB=hvB?Math.max(P.blErbDoku||0,hvB.n):null,gebB=hvB?hvB.nZ:null;
+      const offenB=(grenze!=null&&hvB)?Math.max(0,grenze-erbB-gebB):null;
+      const wochen=Math.max(1,blRest)/7;           // letzter Tag zählt mit
+      const proWo=offenB?Math.round(offenB/wochen*10)/10:0;
+      if(offenB==null||offenB>0)
+        cat.blankoOffen.push({pid:Number(k)||k,name:(inf&&inf.name)||P.name,icd:P.blIcd||icdStr,
+          grenze,erb:erbB,geb:gebB,offen:offenB,rest:blRest,proWo,kggSt,
+          detail:offenB==null?(grenze==null?'Diagnose fehlt — Menge (18/26) unbekannt':'Terminhistorie fehlt — verplant unbekannt')
+            :'Noch '+offenB+' von '+grenze+' frei · '+erbB+' erledigt · '+gebB+' gebucht',
+          hint:offenB==null?'Bitte in thevea prüfen'
+            :'Frist bis '+dmy(blEndeDs)+' ('+blRest+' Tage) · nötig ≈ '+String(proWo).replace('.',',')+'×/Woche'+(proWo>3?' — Frist reicht kaum':''),
+          termin:inf?inf.termine[0]:null,
+          tags:{[proWo>3?'boKnapp':'boOk']:true,[offenB==null?'boUnb':'boX']:true},
+          badge:offenB==null?'?':offenB+' frei',badgeC:offenB==null?'c-amber':proWo>3?'c-red':'c-purple'});
     }
 
     // BVB/LVB-Kachel: thevea beantwortet die Frage nach besonderem Verordnungsbedarf
@@ -4776,6 +4808,9 @@ function buildRezepteTV(voRoh,dd,refDs,detRoh,hist){
   });
 
   cat.nr.sort((a,b)=>b.score-a.score);
+  // Dringlichste zuerst: wer pro Woche am meisten nachholen muss. Unbekannte
+  // (ohne Diagnose/Historie) ans Ende.
+  cat.blankoOffen.sort((a,b)=>(a.offen==null)-(b.offen==null)||b.proWo-a.proWo||(b.offen||0)-(a.offen||0));
   cat.hbAus.sort((a,b)=>String(a.name).localeCompare(String(b.name)));
   return cat;
 }
@@ -4946,10 +4981,11 @@ function showRD(k){
   document.querySelectorAll('.rkpi').forEach(x=>x.classList.remove('active'));const el=document.getElementById('rk-'+k);if(el)el.classList.add('active');
   if(k==='patienten'){showErgoPatients();return;}
   if(k==='blankopot'){showBlankoPot();return;}
-  const c=RC;let items=[],title='',isNR=false,isBVB=false,isBL=false;
+  const c=RC;let items=[],title='',isNR=false,isBVB=false,isBL=false,isBO=false;
   if(k==='nr'){items=c.nr;title='🔥 Nachrücker';isNR=true;}
   else if(k==='bvb'){items=c.bvb;title='🏥 BVB/LVB';isBVB=true;}
   else if(k==='blanko'){items=c.blanko;title='💊 Alle Blanko (16 Wo)';isBL=true;}
+  else if(k==='blankoOffen'){items=c.blankoOffen||[];title='🎯 Blanko offen — noch nicht durchgeplant';isBO=true;}
   else if(k==='folge'){items=c.folge;title='🔴 Folgerezept';}
   else if(k==='reserv'){items=c.reserv;title='⚠️ Ohne VO';}
   else if(k==='freq'){items=c.freq;title='📈 Frequenz↑';}
@@ -4962,6 +4998,10 @@ function showRD(k){
     if(hbAus.length)h+=`<div style="font-size:9px;color:var(--muted);margin-bottom:6px" `
       +`title="${escA(hbAus.map(x=>x.name).join(', '))}">🚗 ${hbAus.length} Hausbesuch`
       +`${hbAus.length===1?'':'e'} nicht in der Liste</div>`;}
+  if(isBO){const fr=items.reduce((s,x)=>s+(x.offen||0),0);
+    h+=`<div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap">`;
+    [{f:'all',l:'Alle',c:items.length},{f:'boKnapp',l:'⏳ Frist knapp (>3×/Wo nötig)',c:items.filter(i=>i.tags.boKnapp).length},{f:'boUnb',l:'Unbekannt',c:items.filter(i=>i.tags.boUnb).length}].forEach(x=>{h+=`<button class="hdr-btn" style="font-size:8px" onclick="filterNR('${x.f}')">${x.l} (${x.c})</button>`;});h+=`</div>`;
+    h+=`<div style="font-size:9px;color:var(--muted);margin-bottom:8px">Ziel: jede Blanko bis zur Orientierungsmenge durchgeplant — <b>18</b> Einheiten des vorrangigen Heilmittels, bei Fraktur/Luxation (S42/S43) <b>26</b>. Frei = Menge − stattgefunden − gebucht (Terminhistorie dieser Verordnung). Zusammen <b>${fr}</b> Behandlungen frei. Sortiert nach nötiger Frequenz bis Fristende.</div>`;}
   if(isBL){h+=`<div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap">`;
     const n=st=>items.filter(i=>i.kggSt===st).length;
     [{f:'all',l:'Alle',c:items.length},{f:'kgV',l:'💪 In KGG geplant',c:n('kgV')},{f:'kgT',l:'Teils KGG',c:n('kgT')},{f:'kgN',l:'Nicht in KGG',c:n('kgN')},{f:'kgO',l:'Ohne Termin',c:n('kgO')}].forEach(x=>{h+=`<button class="hdr-btn" style="font-size:8px" onclick="filterNR('${x.f}')">${x.l} (${x.c})</button>`;});h+=`</div>`;
@@ -4985,6 +5025,7 @@ function showRD(k){
       if(isBVB&&it.tot)h+=`<span class="pr-b c-blue" title="Verordnete Behandlungsmenge">📋 ${it.tot}er</span>`;
       if(isBVB&&it.hb)h+=`<span class="pr-b c-amber" title="Hausbesuch">🚗 HB</span>`;
       if(isBVB&&it.dau)h+=`<span class="pr-b c-purple" title="Dauerpatient">DAU</span>`;
+      if(isBO&&it.kggSt&&it.kggSt!=='kgO')h+=`<span class="pr-b ${it.kggSt==='kgV'?'c-green':it.kggSt==='kgT'?'c-amber':'c-red'}" title="KGG-Planung der nächsten 14 Tage">💪 ${it.kggSt==='kgV'?'KGG':it.kggSt==='kgT'?'teils KGG':'kein KGG'}</span>`;
       if(isBL&&it.kggN)h+=`<span class="pr-b ${it.kggSt==='kgV'?'c-green':it.kggSt==='kgT'?'c-amber':'c-red'}" title="Termine der nächsten 14 Tage in KGG-Stunden">💪 ${it.kggK}/${it.kggN}</span>`;
       if(it.badge)h+=`<span class="pr-b ${it.badgeC||''}">${it.badge}</span>`;
     }
@@ -7829,7 +7870,12 @@ function buildVOFaelle(locId){
     // Höchstmenge: der belegte Wert aus dem Export schlägt jede Tabelle.
     let hoechst=0;kette.forEach(r=>{if(r.dgMax>hoechst)hoechst=r.dgMax;});
     let orient=null,quelle='';
-    if(KAT_ORIENT[gruppe]){orient=KAT_ORIENT[gruppe];quelle='katalog';}
+    // Blanko vor Katalog (09.11.2026): Bei Blanko gilt die Orientierungsmenge
+    // der Blanko-Regel — 26 bei Fraktur/Luxation (S42/S43), sonst 18. Vorher
+    // gewann der Katalog (EX/WS = 18), die 26 kam nie zum Zug.
+    const blG=anyBlanko?blankoGrenze(icd):null;
+    if(blG!=null){orient=blG;hoechst=Math.max(hoechst,blG);quelle='blanko';}
+    else if(KAT_ORIENT[gruppe]){orient=KAT_ORIENT[gruppe];quelle='katalog';}
     else if(anyBlanko){orient=BLANKO_MAX.wtVor;hoechst=hoechst||BLANKO_MAX.wtVor;quelle='blanko';}
     if(!hoechst)hoechst=KAT_HOECHST[gruppe]||6;
     const restBeh=orient!=null?Math.max(0,orient-genutzt):null;
@@ -9715,6 +9761,7 @@ function rzKacheln(c){
     {k:'reserv',   l:'⚠️ Ohne Verordnung', v:(c.reserv||[]).length,   co:'var(--amber)', s:'Termin ohne Rezept · klären'},
     {k:'freq',     l:'📈 Frequenz erhöhen',v:(c.freq||[]).length,     co:'var(--blue)',  s:'Rezept läuft zu langsam'},
     {k:'blankopot',l:'💎 Blanko-Potenzial',v:(c.blankopot||[]).filter(x=>x.tv||x.bvbTyp||x.rest>0).length,co:'var(--purple)',s:'Arzt auf Blanko ansprechen'},
+    {k:'blankoOffen',l:'🎯 Blanko offen', v:(c.blankoOffen||[]).length,co:'var(--purple)',s:(c.blankoOffen||[]).reduce((s,x)=>s+(x.offen||0),0)+' Behandlungen noch nicht verplant'},
     {k:'blanko',   l:'💊 Alle Blanko',     v:(c.blanko||[]).length,   co:'var(--purple)',s:(c.blanko||[]).filter(x=>x.kggSt&&x.kggSt!=='kgV').length+' nicht ganz in KGG geplant'},
     {k:'bvb',      l:'🏥 BVB/LVB',         v:(c.bvb||[]).length,      co:'var(--green)', s:'außerhalb des Budgets'},
     {k:'all',      l:'📋 Alle Fälle',      v:(c.bvb||[]).length+(c.blanko||[]).length+(c.folge||[]).length+(c.reserv||[]).length+(c.freq||[]).length,co:'var(--dark)',s:'gesamt in dieser Ansicht'}
@@ -9801,7 +9848,7 @@ function renderRezepte(){
     // nicht nach Größe: ein auslaufendes Rezept kostet mehr als eine lange
     // Nachrückerliste.
     if(RC){
-      const reihe=['folge','reserv','freq','blankopot','nr','bvb','blanko'];
+      const reihe=['folge','reserv','freq','blankopot','blankoOffen','nr','bvb','blanko'];
       const start=reihe.map(k=>kach.find(x=>x.k===k&&x.v>0)).find(Boolean);
       if(start)showRD(start.k);
     }

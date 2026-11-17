@@ -6883,15 +6883,28 @@ function kennBau(vorhanden){
   // demselben kennLoc() wie für heute. Ein Tag, der am Tag selbst geschrieben
   // wurde, bleibt stehen. Ein schon NACHGERECHNETER Tag wird jedes Mal neu
   // gerechnet: Er ist ohnehin abgeleitet, und so gilt eine neue Regel
-  // (z. B. Überstundenabbau) auch für die Vortage der Woche. Frühere Wochen
-  // nicht: Dafür gibt es in Medifox nur Rezepttermine ohne Dauer und ohne
-  // interne Einträge, und eine Auslastung daraus wäre geraten.
+  // (z. B. Überstundenabbau) auch für die Vortage der Woche.
+  // Frühere Wochen des Monats kommen aus dem Termin-Archiv (archiv/
+  // termine_kz_JJJJ-MM.json): Dort steht der vollständige Kalender jedes Tages,
+  // den der Checker oder der nächtliche Archiv-Flow gesehen hat — mit Dauer,
+  // Blockern und internen Einträgen, also dieselbe Grundlage wie der Wochenplan.
+  // Ohne Archiv-Tag bleibt der Tag leer: Aus behandlungen_alle (Rezepttermine
+  // ohne Dauer, ohne interne Einträge) wäre eine Auslastung geraten.
+  // (17.11.2026: KW 46 fehlte, weil der Checker eine Woche zu war.)
   if(STANDORT==='kitzingen'&&datenTag){
     LOCS.forEach(l=>{
-      const dd=DATA[l.suf];if(!dd||!dd.azHist||!dd.woche||!Array.isArray(dd.woche.tp))return;
-      dd.woche.tp.forEach(tag=>{
+      const dd=DATA[l.suf];if(!dd||!dd.azHist)return;
+      // Archiv zuerst, der Wochenplan überschreibt: er ist der jüngere Stand.
+      const quelle={};
+      Object.keys(dd.archivTage||{}).forEach(ds=>{const tg=dd.archivTage[ds];
+        if(Array.isArray(tg)&&tg.length)quelle[ds]=ohneAbsagen(tg);});
+      ((dd.woche&&Array.isArray(dd.woche.tp))?dd.woche.tp:[]).forEach(tag=>{
         if(!Array.isArray(tag)||!tag.length)return;
         const ds=String(tag[0].Beginn||'').slice(0,10);
+        if(/^\d{4}-\d{2}-\d{2}$/.test(ds))quelle[ds]=tag;
+      });
+      Object.keys(quelle).sort().forEach(ds=>{
+        const tag=quelle[ds];
         if(!/^\d{4}-\d{2}-\d{2}$/.test(ds)||ds>=datenTag||ds.slice(0,7)!==monat)return;
         const az=dd.azHist[ds];if(!az)return;
         const t=proTag[ds]||(proTag[ds]={ds});
@@ -7049,8 +7062,24 @@ async function archivSchreiben(){
   }
 }
 
+// Die Archiv-Tage des laufenden Monats lesen, damit kennBau() Vortage, die
+// nicht mehr im Wochenplan stehen, aus dem vollständigen Kalender nachrechnen
+// kann. Nur lesen; geschrieben wird das Archiv in archivSchreiben().
+async function archivLaden(){
+  if(!ST.archiv)return;
+  const m=aufMonatVon(Date.now());
+  for(const l of LOCS){
+    const dd=DATA[l.suf];if(!dd)continue;
+    try{
+      const alt=await kennAltLaden(ST.ablage+'archiv/termine_'+l.id+'_'+m+'.json');
+      dd.archivTage=(alt&&alt.da&&alt.da.v===ARCHIV_V&&alt.da.tage)?alt.da.tage:{};
+    }catch(e){dd.archivTage={};}
+  }
+}
+
 async function kennStart(){
   try{await kennPensumLaden();}catch(e){}
+  try{await archivLaden();}catch(e){}
   try{if(!await kennSchreiben())kennSchmutzig=true;}catch(e){kennSchmutzig=true;console.warn('Kennzahlen:',e);}
   try{await archivSchreiben();}catch(e){console.warn('Archiv:',e);}
   // Die vergangenen Tage des laufenden und des Vormonats mitladen: Ohne sie
